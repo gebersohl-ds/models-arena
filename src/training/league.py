@@ -111,3 +111,17 @@ class LeagueManager:
         # Otherwise 50% vs current best (or current agent copy)
         best = self.best_agent if has_best else current_agent
         return best, "best"
+
+    def record_result(self, category: str, won: bool, draw: bool = False) -> None:
+        """Update match win/loss records for a sampled historical opponent."""
+        if category.startswith("historical_"):
+            cp_id = category[len("historical_"):]
+            for cp in self.snapshots:
+                if cp.id == cp_id:
+                    if won:
+                        cp.wins += 1
+                    elif draw:
+                        cp.draws += 1
+                    else:
+                        cp.losses += 1
+                    break

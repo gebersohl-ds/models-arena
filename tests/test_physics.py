@@ -198,3 +198,25 @@ def test_obstacle_collision():
     # Agent should bounce backward away from obstacle
     assert agent.vel[0] > 0.0
     assert agent.pos[0] >= 1.8 - 1e-5
+
+
+def test_reverse_brake_and_deadband():
+    engine = PhysicsEngine(dt=0.02)
+
+    # 1. Neutral deadband: thrust in (-0.3, 0.0] must not accelerate agent
+    agent_dead = DiscAgent(initial_pos=np.array([0.0, 0.0]), initial_angle=0.0)
+    engine.apply_agent_controls(agent_dead, np.array([-0.15, 0.0, 0.0]))
+    assert np.allclose(agent_dead.vel, [0.0, 0.0])
+
+    # Exactly at boundary -0.3: brake scale is 0.0 -> no acceleration
+    agent_boundary = DiscAgent(initial_pos=np.array([0.0, 0.0]), initial_angle=0.0)
+    engine.apply_agent_controls(agent_boundary, np.array([-0.3, 0.0, 0.0]))
+    assert np.allclose(agent_boundary.vel, [0.0, 0.0])
+
+    # 2. Reverse brake: thrust in [-1.0, -0.3] must apply reverse brake along -heading
+    agent_brake = DiscAgent(initial_pos=np.array([0.0, 0.0]), initial_angle=0.0)
+    engine.apply_agent_controls(agent_brake, np.array([-1.0, 0.0, 0.0]))
+    # Agent facing +X, reverse brake should push along -X
+    assert agent_brake.vel[0] < 0.0
+    expected_accel = -agent_brake.config.max_brake / agent_brake.config.mass
+    assert np.isclose(agent_brake.vel[0], expected_accel * 0.02, atol=1e-4)

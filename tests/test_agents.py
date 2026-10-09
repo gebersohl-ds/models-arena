@@ -106,3 +106,32 @@ def test_ppo_policy():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def test_heuristic_anchor_bracing_when_stationary():
+    """Verify that HeuristicAgent triggers Anchor when stationary if opponent is rushing its flank/rear."""
+    agent = HeuristicAgent()
+
+    obs = np.zeros(46, dtype=np.float32)
+    # Self at origin, stationary, facing +X (angle 0)
+    obs[0] = 0.0
+    obs[1] = 0.0
+    obs[2] = 0.0
+    obs[3] = 0.0
+    obs[4] = 1.0  # cos(theta) = 1 (facing +X)
+    obs[5] = 0.0
+
+    # Opponent is behind self at (-1.5, 0), moving fast toward +X (closing in on self's rear)
+    # dx = -1.5 / 20.0, dy = 0
+    obs[7] = -1.5 / 20.0
+    obs[8] = 0.0
+    # dvx = (v_opp - v_self) = (+10.0 - 0.0) / 30.0
+    obs[9] = 10.0 / 30.0
+    obs[10] = 0.0
+
+    # dist_opp = 1.5 < 2.0
+    # rel_speed_towards_self = -(dx * dvx) / dist = -(-1.5 * 10.0) / 1.5 = +10.0 > 3.0
+    # Opponent is at 180 deg (behind), self is facing 0 deg -> ang_err_opp = pi > pi/3
+    action = agent.act(obs)
+    # Must trigger anchor bracing (ability < -0.5)
+    assert action[2] < -0.5, f"Expected anchor bracing (ability < -0.5), got {action[2]}"

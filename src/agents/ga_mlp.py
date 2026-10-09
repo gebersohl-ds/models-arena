@@ -13,10 +13,12 @@ class GAMLP(BaseAgent):
         hidden_dims: tuple[int, int] = (32, 32),
         output_dim: int = 3,
         weights: np.ndarray | None = None,
+        stochasticity: float = 0.0,
     ):
         self.input_dim = input_dim
         self.h1, self.h2 = hidden_dims
         self.output_dim = output_dim
+        self.stochasticity = float(stochasticity)
 
         # Calculate parameter partition sizes
         self.w1_size = self.input_dim * self.h1
@@ -84,12 +86,18 @@ class GAMLP(BaseAgent):
         idx += self.w3_size
         self.b3 = flat[idx : idx + self.b3_size]
 
-    def act(self, obs: np.ndarray) -> np.ndarray:
+    def act(self, obs: np.ndarray, temperature: float | None = None) -> np.ndarray:
         """Forward pass for a single 46-dimensional observation vector."""
         x = np.asarray(obs, dtype=np.float32)
         h1 = np.tanh(x @ self.w1 + self.b1)
         h2 = np.tanh(h1 @ self.w2 + self.b2)
         out = np.tanh(h2 @ self.w3 + self.b3)
+
+        effective_noise = temperature if temperature is not None else self.stochasticity
+        if effective_noise > 0.0:
+            noise = np.random.normal(0.0, effective_noise, size=out.shape).astype(np.float32)
+            out = np.clip(out + noise, -1.0, 1.0)
+
         return out.astype(np.float32)
 
     def batch_act(self, obs_batch: np.ndarray) -> np.ndarray:
@@ -107,13 +115,13 @@ class GAMLP(BaseAgent):
         noise = np.random.randn(len(w)).astype(np.float32) * sigma
         w[mask] += noise[mask]
 
-        offspring = GAMLP(self.input_dim, (self.h1, self.h2), self.output_dim)
+        offspring = GAMLP(self.input_dim, (self.h1, self.h2), self.output_dim, stochasticity=self.stochasticity)
         offspring.set_weights(w)
         return offspring
 
     def clone(self) -> "GAMLP":
         """Create an identical copy of this agent."""
-        c = GAMLP(self.input_dim, (self.h1, self.h2), self.output_dim)
+        c = GAMLP(self.input_dim, (self.h1, self.h2), self.output_dim, stochasticity=self.stochasticity)
         c.set_weights(self.get_weights())
         return c
 

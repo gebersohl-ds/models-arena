@@ -1,12 +1,19 @@
 """Self-Play Proximal Policy Optimization (PPO) with Prioritized Fictitious Self-Play (PFSP)."""
 
 import os
+import sys
+from pathlib import Path
 import time
 import argparse
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+
+# Ensure repository root is on sys.path for direct CLI execution
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 
 from src.agents.ppo_policy import PPOPolicy
 from src.agents.heuristic import HeuristicAgent
@@ -102,9 +109,14 @@ def train_ppo(
             rewards_buf[step] = torch.as_tensor(rewards[:, 0], dtype=torch.float32)
             dones_buf[step] = torch.as_tensor(dones, dtype=torch.float32)
 
-            # If environment finished, resample opponent for that env
+            # If environment finished, record result and resample opponent for that env
             for e_idx in range(num_envs):
                 if dones[e_idx]:
+                    winner = infos[e_idx].get("winner")
+                    _, opp_cat = opponents[e_idx]
+                    opp_won = (winner == "agent_1")
+                    is_draw = (winner is None)
+                    league.record_result(opp_cat, won=opp_won, draw=is_draw)
                     opponents[e_idx] = league.sample_opponent(policy)
 
             obs = next_obs
@@ -117,11 +129,10 @@ def train_ppo(
             advantages = torch.zeros_like(rewards_buf)
             lastgaelam = 0.0
             for t in reversed(range(num_steps)):
+                nextnonterminal = 1.0 - dones_buf[t]
                 if t == num_steps - 1:
-                    nextnonterminal = 1.0 - dones_buf[t]
                     nextvalues = next_value
                 else:
-                    nextnonterminal = 1.0 - dones_buf[t + 1]
                     nextvalues = values_buf[t + 1]
                 delta = rewards_buf[t] + gamma * nextvalues * nextnonterminal - values_buf[t]
                 advantages[t] = lastgaelam = delta + gamma * gae_lambda * nextnonterminal * lastgaelam
@@ -209,8 +220,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Kinetic Sumo using Self-Play PPO")
     parser.add_argument("--timesteps", type=int, default=50_000, help="Total timesteps")
     parser.add_argument("--num-envs", type=int, default=16, help="Parallel environments")
+    parser.add_argument("--num-steps", type=int, default=128, help="Steps per rollout per env")
     parser.add_argument("--map", type=str, default="Open", help="Arena map preset")
     parser.add_argument("--save-dir", type=str, default="checkpoints/ppo", help="Output directory")
     args = parser.parse_args()
 
-    train_ppo(total_timesteps=args.timesteps, num_envs=args.num_envs, map_name=args.map, save_dir=args.save_dir)
+    train_ppo(
+        total_timesteps=args.timesteps,
+        num_envs=args.num_envs,
+        num_steps=args.num_steps,
+        map_name=args.map,
+        save_dir=args.save_dir,
+    )

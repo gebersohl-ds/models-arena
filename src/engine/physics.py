@@ -45,6 +45,10 @@ class PhysicsEngine:
         dt: float = 0.02,
         restitution: float = 0.8,
         flank_impulse_multiplier: float = 2.5,
+        surface_friction: float = 1.0,
+        shrink_mode: str = "continuous",
+        step_interval: float = 5.0,
+        step_drop_amount: float = 1.5,
     ):
         self.initial_radius = float(initial_radius)
         self.min_radius = float(min_radius)
@@ -53,11 +57,22 @@ class PhysicsEngine:
         self.dt = float(dt)
         self.restitution = float(restitution)
         self.flank_impulse_multiplier = float(flank_impulse_multiplier)
+        self.surface_friction = float(surface_friction)
+        self.shrink_mode = str(shrink_mode)
+        self.step_interval = float(step_interval)
+        self.step_drop_amount = float(step_drop_amount)
 
     def compute_arena_radius(self, match_time: float) -> float:
         """Calculate dynamic outer ring radius based on match elapsed time."""
         if match_time <= self.shrink_start_time:
             return self.initial_radius
+
+        if self.shrink_mode == "stepped":
+            elapsed_shrink = match_time - self.shrink_start_time
+            num_drops = int(elapsed_shrink // self.step_interval) + 1
+            dropped_r = self.initial_radius - num_drops * self.step_drop_amount
+            return float(max(self.min_radius, dropped_r))
+
         shrink_window = max(1e-5, self.round_duration - self.shrink_start_time)
         progress = np.clip((match_time - self.shrink_start_time) / shrink_window, 0.0, 1.0)
         return float(self.initial_radius - progress * (self.initial_radius - self.min_radius))
@@ -90,12 +105,16 @@ class PhysicsEngine:
         else:
             if thrust_cmd > 0.0:
                 linear_force = heading * (thrust_cmd * cfg.max_thrust)
-            elif thrust_cmd < 0.0:
-                # Reverse thrust / brake
-                linear_force = heading * (thrust_cmd * cfg.max_brake)
+            elif thrust_cmd <= -0.3:
+                # Reverse brake [-1, -0.3] scaled from 0 at -0.3 to full at -1.0
+                brake_scale = float(np.clip((-thrust_cmd - 0.3) / 0.7, 0.0, 1.0))
+                linear_force = -heading * (brake_scale * cfg.max_brake)
+            else:
+                # Neutral coasting deadzone in (-0.3, 0.0]
+                linear_force = np.zeros(2, dtype=np.float32)
 
-        # Linear drag force (anchored multiplies friction by 4x)
-        drag_coeff = cfg.linear_drag * (cfg.anchor_friction_mult if agent.is_anchored else 1.0)
+        # Linear drag force (anchored multiplies friction by 4x, ice surface reduces drag)
+        drag_coeff = cfg.linear_drag * (cfg.anchor_friction_mult if agent.is_anchored else self.surface_friction)
         drag_force = -drag_coeff * agent.vel
         net_force = linear_force + drag_force
 
@@ -116,7 +135,7 @@ class PhysicsEngine:
             steer_torque = steer_cmd * cfg.max_torque
 
         # Non-linear rotational damping: tau_drag = -mu * omega * |omega|
-        ang_drag_mu = cfg.angular_drag * (cfg.anchor_friction_mult if agent.is_anchored else 1.0)
+        ang_drag_mu = cfg.angular_drag * (cfg.anchor_friction_mult if agent.is_anchored else self.surface_friction)
         tau_drag = -ang_drag_mu * agent.angular_vel * abs(agent.angular_vel)
         net_torque = steer_torque + tau_drag
 

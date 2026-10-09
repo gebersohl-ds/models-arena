@@ -6,6 +6,8 @@ import pygame
 from src.engine.entities import DiscAgent
 from src.engine.physics import CollisionResult, Obstacle
 from src.maps import ArenaMap
+from src.ui.audio import SoundEngine
+
 
 
 class Particle:
@@ -48,7 +50,10 @@ class SumoRenderer:
 
         if not pygame.get_init():
             pygame.init()
+        if not pygame.font.get_init():
             pygame.font.init()
+        if not pygame.display.get_init():
+            pygame.display.init()
 
         if self.mode == "human":
             self.screen = pygame.display.set_mode((self.screen_size, self.screen_size))
@@ -60,8 +65,14 @@ class SumoRenderer:
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("Consolas", 16, bold=True)
         self.title_font = pygame.font.SysFont("Consolas", 24, bold=True)
+        self.small_font = pygame.font.SysFont("Consolas", 12)
 
         self.particles: list[Particle] = []
+        self.audio = SoundEngine(enabled=(self.mode == "human"))
+        self._prev_winner: str | None = None
+        self._prev_dashing: dict[str, bool] = {}
+        self._prev_anchored: dict[str, bool] = {}
+
 
     def world_to_screen(self, pos: np.ndarray) -> tuple[int, int]:
         """Convert world coordinates (meters) to screen coordinates (pixels)."""
@@ -87,13 +98,38 @@ class SumoRenderer:
         last_collision: CollisionResult | None = None,
         winner: str | None = None,
         is_draw: bool = False,
+        round_scores: tuple[int, int] = (0, 0),
+        rounds_to_win: int = 3,
+        agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
+        subtitle: str | None = None,
+        fps: int | None = None,
     ) -> np.ndarray | None:
         """Render a single frame."""
+        if fps is not None and fps > 0:
+            self.fps = fps
         dt = 1.0 / self.fps
 
-        # 1. Update particles
-        if last_collision and last_collision.occurred and last_collision.contact_pos is not None:
-            self.add_sparks(last_collision.contact_pos, count=20)
+        # 1. Update particles and trigger audio
+        if last_collision and last_collision.occurred:
+            if last_collision.contact_pos is not None:
+                self.add_sparks(last_collision.contact_pos, count=20)
+            impulse = max(last_collision.impulse_a, last_collision.impulse_b)
+            self.audio.play_clang(
+                is_flank=last_collision.flank_hit_on_a or last_collision.flank_hit_on_b,
+                intensity=float(np.clip(impulse / 15.0, 0.3, 1.0)),
+            )
+
+        for a_id, ag in agents.items():
+            if ag.is_dashing and not self._prev_dashing.get(a_id, False):
+                self.audio.play_dash()
+            if ag.is_anchored and not self._prev_anchored.get(a_id, False):
+                self.audio.play_anchor()
+            self._prev_dashing[a_id] = ag.is_dashing
+            self._prev_anchored[a_id] = ag.is_anchored
+
+        if winner and winner != self._prev_winner:
+            self.audio.play_ringout()
+        self._prev_winner = winner
 
         # Thruster exhaust particles
         for a_id, ag in agents.items():
@@ -115,6 +151,7 @@ class SumoRenderer:
                         )
                     )
 
+
         self.particles = [p for p in self.particles if p.update(dt)]
 
         # 2. Draw Background & Outer Void
@@ -126,12 +163,31 @@ class SumoRenderer:
 
         # Active Arena ring
         r_curr_px = max(1, int(arena_radius * self.scale))
-        # Inner arena floor
-        pygame.draw.circle(self.screen, (22, 26, 38), (int(self.center[0]), int(self.center[1])), r_curr_px)
+        hazard = getattr(self.arena_map, "hazard_type", "standard")
+        if hazard == "ice":
+            floor_color = (16, 28, 44)
+            border_color = (130, 220, 255)
+        elif hazard == "bumper":
+            floor_color = (25, 20, 36)
+            border_color = (255, 100, 200)
+        else:
+            floor_color = (22, 26, 38)
+            border_color = (80, 160, 255)
 
-        # Ring border with shrink warning
         is_shrinking = elapsed_time > self.arena_map.shrink_start_time
-        border_color = (255, 75, 75) if is_shrinking else (80, 160, 255)
+        if is_shrinking:
+            border_color = (255, 75, 75)
+
+        # Inner arena floor
+        pygame.draw.circle(self.screen, floor_color, (int(self.center[0]), int(self.center[1])), r_curr_px)
+
+        # Concentric stepped rings for Sinking_Pillars
+        if getattr(self.arena_map, "shrink_mode", "continuous") == "stepped":
+            for step_r in [8.5, 7.0, 5.5, 4.0]:
+                if step_r <= arena_radius:
+                    s_px = int(step_r * self.scale)
+                    pygame.draw.circle(self.screen, (40, 55, 80), (int(self.center[0]), int(self.center[1])), s_px, 1)
+
         pygame.draw.circle(self.screen, border_color, (int(self.center[0]), int(self.center[1])), r_curr_px, 4)
 
         # Subtle arena center crosshair
@@ -143,10 +199,22 @@ class SumoRenderer:
         for obs in self.arena_map.obstacles:
             ox, oy = self.world_to_screen(obs.pos)
             or_px = int(obs.radius * self.scale)
-            # Metallic bumper
-            pygame.draw.circle(self.screen, (45, 52, 70), (ox, oy), or_px)
-            pygame.draw.circle(self.screen, (100, 140, 180), (ox, oy), or_px, 3)
-            pygame.draw.circle(self.screen, (180, 220, 255), (ox, oy), max(2, or_px // 3))
+            if obs.restitution >= 1.8:
+                # High restitution pinball bumper
+                pygame.draw.circle(self.screen, (55, 20, 45), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (255, 70, 180), (ox, oy), or_px, 3)
+                pygame.draw.circle(self.screen, (255, 220, 50), (ox, oy), max(3, or_px // 2))
+                pygame.draw.circle(self.screen, (255, 255, 255), (ox, oy), max(2, or_px // 4))
+            elif hazard == "ice":
+                # Ice pillar
+                pygame.draw.circle(self.screen, (30, 50, 75), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (120, 200, 255), (ox, oy), or_px, 2)
+                pygame.draw.circle(self.screen, (220, 245, 255), (ox, oy), max(2, or_px // 3))
+            else:
+                # Metallic bumper
+                pygame.draw.circle(self.screen, (45, 52, 70), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (100, 140, 180), (ox, oy), or_px, 3)
+                pygame.draw.circle(self.screen, (180, 220, 255), (ox, oy), max(2, or_px // 3))
 
         # 4. Draw Particles (Sparks & Thruster trails)
         for p in self.particles:
@@ -242,7 +310,17 @@ class SumoRenderer:
                     pygame.draw.line(self.screen, lcolor, (ax, ay), (rx, ry), 1)
 
         # 7. HUD & Telemetry
-        self._render_hud(agents, arena_radius, elapsed_time, winner, is_draw)
+        self._render_hud(
+            agents,
+            arena_radius,
+            elapsed_time,
+            winner,
+            is_draw,
+            round_scores,
+            rounds_to_win,
+            agent_names,
+            subtitle,
+        )
 
         if self.mode == "human":
             pygame.display.flip()
@@ -260,26 +338,48 @@ class SumoRenderer:
         elapsed_time: float,
         winner: str | None,
         is_draw: bool,
+        round_scores: tuple[int, int] = (0, 0),
+        rounds_to_win: int = 3,
+        agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
+        subtitle: str | None = None,
     ) -> None:
         # Match timer
         time_left = max(0.0, self.arena_map.round_duration - elapsed_time)
         time_text = self.title_font.render(f"TIME: {time_left:4.1f}s", True, (240, 240, 255))
-        self.screen.blit(time_text, (self.screen_size // 2 - time_text.get_width() // 2, 20))
+        self.screen.blit(time_text, (self.screen_size // 2 - time_text.get_width() // 2, 16))
+
+        # Rounds score (First to 3)
+        score_txt = self.font.render(
+            f"ROUNDS: {round_scores[0]} - {round_scores[1]} (First to {rounds_to_win})",
+            True,
+            (220, 220, 240),
+        )
+        self.screen.blit(score_txt, (self.screen_size // 2 - score_txt.get_width() // 2, 44))
+
+        # Subtitle (e.g. tournament matchup info)
+        if subtitle:
+            sub_txt = self.font.render(subtitle, True, (255, 215, 0))
+            self.screen.blit(sub_txt, (self.screen_size // 2 - sub_txt.get_width() // 2, 68))
+            rad_y = 90
+        else:
+            rad_y = 68
 
         # Arena radius status
         rad_color = (255, 100, 100) if elapsed_time > self.arena_map.shrink_start_time else (150, 200, 255)
         rad_text = self.font.render(f"RING RADIUS: {arena_radius:.1f}m", True, rad_color)
-        self.screen.blit(rad_text, (self.screen_size // 2 - rad_text.get_width() // 2, 55))
+        self.screen.blit(rad_text, (self.screen_size // 2 - rad_text.get_width() // 2, rad_y))
 
         # Agent 0 Bar (Left)
         ag0 = agents.get("agent_0")
         if ag0:
-            self._draw_agent_bars(ag0, 30, 20, "AGENT 0 (Cyan)", (0, 210, 255))
+            name0 = agent_names[0] if len(agent_names) > 0 else "AGENT 0"
+            self._draw_agent_bars(ag0, 30, 20, f"{name0} (Cyan)", (0, 210, 255))
 
         # Agent 1 Bar (Right)
         ag1 = agents.get("agent_1")
         if ag1:
-            self._draw_agent_bars(ag1, self.screen_size - 230, 20, "AGENT 1 (Orange)", (255, 87, 34))
+            name1 = agent_names[1] if len(agent_names) > 1 else "AGENT 1"
+            self._draw_agent_bars(ag1, self.screen_size - 240, 20, f"{name1} (Orange)", (255, 87, 34))
 
         # Winner / Game Over Banner
         if winner or is_draw:
@@ -287,10 +387,12 @@ class SumoRenderer:
                 banner_txt = "TIMEOUT DRAW / COLD-WAR STALL"
                 banner_color = (255, 200, 50)
             elif winner == "agent_0":
-                banner_txt = "AGENT 0 WINS BY RING OUT!"
+                name0 = agent_names[0] if len(agent_names) > 0 else "AGENT 0"
+                banner_txt = f"{name0} WINS BY RING OUT!"
                 banner_color = (0, 210, 255)
             else:
-                banner_txt = "AGENT 1 WINS BY RING OUT!"
+                name1 = agent_names[1] if len(agent_names) > 1 else "AGENT 1"
+                banner_txt = f"{name1} WINS BY RING OUT!"
                 banner_color = (255, 87, 34)
 
             b_surface = self.title_font.render(banner_txt, True, banner_color)
@@ -301,21 +403,258 @@ class SumoRenderer:
 
     def _draw_agent_bars(self, agent: DiscAgent, x: int, y: int, label: str, color: tuple) -> None:
         name_txt = self.font.render(label, True, color)
-        self.screen.blit(name_txt, (x, y))
+        draw_x = x
+        if x > self.screen_size // 2:
+            max_right = self.screen_size - 20
+            draw_x = min(x, max_right - name_txt.get_width())
+        self.screen.blit(name_txt, (draw_x, y))
 
         # Energy Bar
         bar_w = 200
-        bar_h = 12
-        e_ratio = np.clip(agent.energy / agent.config.max_energy, 0.0, 1.0)
-        pygame.draw.rect(self.screen, (40, 40, 50), (x, y + 25, bar_w, bar_h))
-        pygame.draw.rect(self.screen, (50, 220, 120), (x, y + 25, int(bar_w * e_ratio), bar_h))
-        pygame.draw.rect(self.screen, (150, 150, 180), (x, y + 25, bar_w, bar_h), 1)
+        bar_h = 10
+        e_ratio = float(np.clip(agent.energy / agent.config.max_energy, 0.0, 1.0))
+        pygame.draw.rect(self.screen, (35, 38, 48), (x, y + 24, bar_w, bar_h))
+        pygame.draw.rect(self.screen, (50, 220, 120), (x, y + 24, int(bar_w * e_ratio), bar_h))
+        pygame.draw.rect(self.screen, (100, 110, 130), (x, y + 24, bar_w, bar_h), 1)
 
-        # Status text
-        state_str = "DASHING" if agent.is_dashing else ("ANCHORED" if agent.is_anchored else "GLIDING")
-        st_txt = self.font.render(f"State: {state_str}", True, (180, 190, 210))
-        self.screen.blit(st_txt, (x, y + 42))
+        # Dash Cooldown Bar
+        cd_ratio = 1.0 - float(np.clip(agent.dash_cooldown / agent.config.dash_cooldown, 0.0, 1.0))
+        cd_color = (0, 200, 255) if cd_ratio >= 1.0 else (120, 140, 180)
+        pygame.draw.rect(self.screen, (35, 38, 48), (x, y + 37, bar_w, 6))
+        pygame.draw.rect(self.screen, cd_color, (x, y + 37, int(bar_w * cd_ratio), 6))
+
+        # Combat Telemetry metrics
+        speed = float(np.linalg.norm(agent.vel))
+        omega = abs(float(agent.angular_vel))
+        state_str = "DASH" if agent.is_dashing else ("ANCHOR" if agent.is_anchored else "GLIDE")
+        if not agent.alive:
+            state_str = "ELIMINATED"
+        telemetry_txt = self.small_font.render(
+            f"SPD:{speed:4.1f}m/s ANG:{omega:4.1f}r/s [{state_str}]",
+            True,
+            (170, 185, 210),
+        )
+        self.screen.blit(telemetry_txt, (x, y + 47))
+
+    def render_4way_frame(
+        self,
+        agents: dict[str, DiscAgent],
+        arena_radius: float,
+        elapsed_time: float,
+        recent_collisions: list[CollisionResult] | None = None,
+        winner: str | None = None,
+        is_draw: bool = False,
+        agent_names: tuple[str, str, str, str] = ("P1 (CYAN)", "P2 (ORANGE)", "P3 (MAGENTA)", "P4 (EMERALD)"),
+        subtitle: str | None = None,
+        fps: int | None = None,
+    ) -> np.ndarray | None:
+        """Render a single frame for 4-Way Battle Royale."""
+        if fps is not None and fps > 0:
+            self.fps = fps
+        dt = 1.0 / self.fps
+
+        # Audio triggers on collisions
+        if recent_collisions:
+            for c_res in recent_collisions:
+                if c_res.occurred:
+                    if c_res.contact_pos is not None:
+                        self.add_sparks(c_res.contact_pos, count=20)
+                    imp = max(c_res.impulse_a, c_res.impulse_b)
+                    self.audio.play_clang(
+                        is_flank=c_res.flank_hit_on_a or c_res.flank_hit_on_b,
+                        intensity=float(np.clip(imp / 15.0, 0.3, 1.0)),
+                    )
+
+        # Agent state sound triggers
+        for a_id, ag in agents.items():
+            if ag.is_dashing and not self._prev_dashing.get(a_id, False):
+                self.audio.play_dash()
+            if ag.is_anchored and not self._prev_anchored.get(a_id, False):
+                self.audio.play_anchor()
+            self._prev_dashing[a_id] = ag.is_dashing
+            self._prev_anchored[a_id] = ag.is_anchored
+
+        if winner and winner != self._prev_winner:
+            self.audio.play_ringout()
+        self._prev_winner = winner
+
+        # Thruster exhaust particles
+        colors_4way = {
+            "agent_0": (0, 210, 255),
+            "agent_1": (255, 87, 34),
+            "agent_2": (255, 0, 180),
+            "agent_3": (0, 230, 120),
+        }
+
+        for a_id, ag in agents.items():
+            if ag.alive:
+                speed = np.linalg.norm(ag.vel)
+                if speed > 0.5 or ag.is_dashing:
+                    rear_offset = -ag.heading_vector * ag.config.radius
+                    emit_pos = ag.pos + rear_offset
+                    clr = (255, 255, 255) if ag.is_dashing else colors_4way.get(a_id, (200, 200, 200))
+                    self.particles.append(
+                        Particle(
+                            emit_pos,
+                            -ag.heading_vector * np.random.uniform(2.0, 6.0),
+                            clr,
+                            lifetime=0.2,
+                            radius=3.0,
+                        )
+                    )
+
+        self.particles = [p for p in self.particles if p.update(dt)]
+
+        # Background
+        self.screen.fill((12, 14, 20))
+
+        # Initial guide ring
+        r_init_px = int(self.arena_map.initial_radius * self.scale)
+        pygame.draw.circle(self.screen, (25, 30, 45), (int(self.center[0]), int(self.center[1])), r_init_px, 1)
+
+        # Active Arena floor
+        r_curr_px = max(1, int(arena_radius * self.scale))
+        hazard = getattr(self.arena_map, "hazard_type", "standard")
+        if hazard == "ice":
+            floor_color = (16, 28, 44)
+            border_color = (130, 220, 255)
+        elif hazard == "bumper":
+            floor_color = (25, 20, 36)
+            border_color = (255, 100, 200)
+        else:
+            floor_color = (22, 26, 38)
+            border_color = (80, 160, 255)
+
+        is_shrinking = elapsed_time > self.arena_map.shrink_start_time
+        if is_shrinking:
+            border_color = (255, 75, 75)
+
+        pygame.draw.circle(self.screen, floor_color, (int(self.center[0]), int(self.center[1])), r_curr_px)
+
+        # Concentric stepped rings for Sinking_Pillars
+        if getattr(self.arena_map, "shrink_mode", "continuous") == "stepped":
+            for step_r in [8.5, 7.0, 5.5, 4.0]:
+                if step_r <= arena_radius:
+                    s_px = int(step_r * self.scale)
+                    pygame.draw.circle(self.screen, (40, 55, 80), (int(self.center[0]), int(self.center[1])), s_px, 1)
+
+        pygame.draw.circle(self.screen, border_color, (int(self.center[0]), int(self.center[1])), r_curr_px, 4)
+
+        # Center crosshair
+        c_x, c_y = int(self.center[0]), int(self.center[1])
+        pygame.draw.line(self.screen, (40, 48, 68), (c_x - 15, c_y), (c_x + 15, c_y), 1)
+        pygame.draw.line(self.screen, (40, 48, 68), (c_x, c_y - 15), (c_x, c_y + 15), 1)
+
+        # Obstacles
+        for obs in self.arena_map.obstacles:
+            ox, oy = self.world_to_screen(obs.pos)
+            or_px = int(obs.radius * self.scale)
+            if obs.restitution >= 1.8:
+                # High restitution pinball bumper
+                pygame.draw.circle(self.screen, (55, 20, 45), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (255, 70, 180), (ox, oy), or_px, 3)
+                pygame.draw.circle(self.screen, (255, 220, 50), (ox, oy), max(3, or_px // 2))
+                pygame.draw.circle(self.screen, (255, 255, 255), (ox, oy), max(2, or_px // 4))
+            elif hazard == "ice":
+                # Ice pillar
+                pygame.draw.circle(self.screen, (30, 50, 75), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (120, 200, 255), (ox, oy), or_px, 2)
+                pygame.draw.circle(self.screen, (220, 245, 255), (ox, oy), max(2, or_px // 3))
+            else:
+                # Metallic bumper
+                pygame.draw.circle(self.screen, (45, 52, 70), (ox, oy), or_px)
+                pygame.draw.circle(self.screen, (100, 140, 180), (ox, oy), or_px, 3)
+                pygame.draw.circle(self.screen, (180, 220, 255), (ox, oy), max(2, or_px // 3))
+
+        # Particles
+        for p in self.particles:
+            px, py = self.world_to_screen(p.pos)
+            alpha_ratio = max(0.0, p.lifetime / p.max_lifetime)
+            cur_r = max(1, int(p.radius * alpha_ratio))
+            pygame.draw.circle(self.screen, p.color, (px, py), cur_r)
+
+        # Agents
+        for a_id, agent in agents.items():
+            if not agent.alive:
+                continue
+
+            ax, ay = self.world_to_screen(agent.pos)
+            ar_px = int(agent.config.radius * self.scale)
+
+            if agent.is_anchored:
+                pygame.draw.circle(self.screen, (150, 150, 150), (ax, ay), ar_px + 8, 2)
+            if agent.is_dashing:
+                pygame.draw.circle(self.screen, (255, 255, 255), (ax, ay), ar_px + 6, 2)
+
+            pygame.draw.circle(self.screen, (30, 34, 48), (ax, ay), ar_px)
+            pygame.draw.circle(self.screen, colors_4way[a_id], (ax, ay), ar_px, 3)
+
+            half_arc = agent.config.bumper_arc / 2.0
+            base_screen_ang = -agent.angle
+            rect = pygame.Rect(ax - ar_px, ay - ar_px, ar_px * 2, ar_px * 2)
+            pygame.draw.arc(
+                self.screen,
+                (255, 255, 255),
+                rect,
+                base_screen_ang - half_arc,
+                base_screen_ang + half_arc,
+                5,
+            )
+
+            head = agent.heading_vector
+            tip_pos = agent.pos + head * (agent.config.radius * 1.1)
+            tx, ty = self.world_to_screen(tip_pos)
+            pygame.draw.line(self.screen, (255, 255, 255), (ax, ay), (tx, ty), 3)
+
+        # 4-Way HUD
+        time_left = max(0.0, self.arena_map.round_duration - elapsed_time)
+        t_surf = self.title_font.render(f"4-WAY FFA: {time_left:4.1f}s", True, (240, 240, 255))
+        self.screen.blit(t_surf, (self.screen_size // 2 - t_surf.get_width() // 2, 16))
+
+        rad_color = (255, 100, 100) if elapsed_time > self.arena_map.shrink_start_time else (150, 200, 255)
+        rad_surf = self.font.render(f"RING RADIUS: {arena_radius:.1f}m", True, rad_color)
+        self.screen.blit(rad_surf, (self.screen_size // 2 - rad_surf.get_width() // 2, 46))
+
+        # 4 Player Cards
+        corner_coords = [
+            (25, 20),                                # agent_0: top-left
+            (self.screen_size - 225, 20),           # agent_1: top-right
+            (25, self.screen_size - 75),            # agent_2: bottom-left
+            (self.screen_size - 225, self.screen_size - 75),  # agent_3: bottom-right
+        ]
+        agent_keys = ["agent_0", "agent_1", "agent_2", "agent_3"]
+        for idx, ak in enumerate(agent_keys):
+            if ak in agents:
+                cx, cy = corner_coords[idx]
+                lbl = agent_names[idx] if idx < len(agent_names) else ak.upper()
+                self._draw_agent_bars(agents[ak], cx, cy, lbl, colors_4way[ak])
+
+        # Elimination / Winner banner
+        if winner or is_draw:
+            if is_draw:
+                banner_txt = "4-WAY BATTLE DRAW"
+                banner_color = (255, 200, 50)
+            else:
+                w_idx = agent_keys.index(winner) if winner in agent_keys else 0
+                w_name = agent_names[w_idx] if w_idx < len(agent_names) else winner.upper()
+                banner_txt = f"{w_name} IS THE LAST DISC STANDING!"
+                banner_color = colors_4way.get(winner, (255, 255, 255))
+
+            b_surface = self.title_font.render(banner_txt, True, banner_color)
+            self.screen.blit(
+                b_surface,
+                (self.screen_size // 2 - b_surface.get_width() // 2, self.screen_size - 110),
+            )
+
+        if self.mode == "human":
+            pygame.display.flip()
+            self.clock.tick(self.fps)
+            return None
+        else:
+            img = pygame.surfarray.array3d(self.screen)
+            return np.transpose(img, (1, 0, 2))
 
     def close(self) -> None:
         if pygame.get_init():
             pygame.quit()
+

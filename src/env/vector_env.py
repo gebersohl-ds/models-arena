@@ -196,11 +196,12 @@ class VectorArenaEnv:
         heading = np.stack([cos_ang, sin_ang], axis=-1)  # (num_envs, 2, 2)
 
         # 3. Linear forces
-        # Forward or brake thrust
+        # Forward [0, 1] or reverse brake [-1, -0.3] with neutral deadband in (-0.3, 0.0]
+        brake_scale = np.clip((-thrust_cmd - 0.3) / 0.7, 0.0, 1.0)
         thrust_force = np.where(
             thrust_cmd > 0.0,
             thrust_cmd * self.max_thrust,
-            thrust_cmd * self.max_brake,
+            np.where(thrust_cmd <= -0.3, -brake_scale * self.max_brake, 0.0),
         )
         # Dash multiplier
         thrust_force = np.where(is_dashing, self.max_thrust * self.dash_mult, thrust_force)
@@ -251,9 +252,20 @@ class VectorArenaEnv:
             normals = delta_p[c_idx] / dist_d[c_idx, None]  # normal 0 -> 1
             pens = (min_dist - dist_d[c_idx])[:, None]
 
-            # Separate positions
-            self.pos[c_idx, 0] -= normals * (pens * 0.5)
-            self.pos[c_idx, 1] += normals * (pens * 0.5)
+            # Separate positions respecting anchor states
+            anc_0 = is_anchored[c_idx, 0]
+            anc_1 = is_anchored[c_idx, 1]
+
+            case_0_anc = anc_0 & (~anc_1)
+            case_1_anc = anc_1 & (~anc_0)
+            case_both = ~(case_0_anc | case_1_anc)
+
+            self.pos[c_idx, 0] -= normals * (
+                np.where(case_1_anc[:, None], pens, np.where(case_both[:, None], pens * 0.5, 0.0))
+            )
+            self.pos[c_idx, 1] += normals * (
+                np.where(case_0_anc[:, None], pens, np.where(case_both[:, None], pens * 0.5, 0.0))
+            )
 
             # Rel vel
             rel_v = self.vel[c_idx, 1] - self.vel[c_idx, 0]
@@ -264,6 +276,8 @@ class VectorArenaEnv:
                 app_idx = c_idx[approach]
                 app_normals = normals[approach]
                 app_vrel = v_rel_n[approach]
+                anc_app_0 = is_anchored[app_idx, 0]
+                anc_app_1 = is_anchored[app_idx, 1]
 
                 # Bumper checks
                 head_0 = heading[app_idx, 0]
@@ -273,7 +287,9 @@ class VectorArenaEnv:
                 bumper_0 = dot_0 >= np.cos(self.bumper_half_arc)
                 bumper_1 = dot_1 >= np.cos(self.bumper_half_arc)
 
-                j_base = -(1.0 + self.restitution) * app_vrel / (2.0 / self.mass)
+                m0 = self.mass * np.where(anc_app_0, self.anchor_friction_mult, 1.0)
+                m1 = self.mass * np.where(anc_app_1, self.anchor_friction_mult, 1.0)
+                j_base = -(1.0 + self.restitution) * app_vrel / (1.0 / m0 + 1.0 / m1)
 
                 j0 = j_base.copy()
                 j1 = j_base.copy()
@@ -287,6 +303,10 @@ class VectorArenaEnv:
                 flank_0 = bumper_1 & (~bumper_0)
                 j0[flank_0] = j_base[flank_0] * self.flank_mult
                 j1[flank_0] = 0.0
+
+                # Anchor absorption: if target is anchored, reduce applied impulse
+                j0 = np.where(anc_app_0, j0 * 0.5, j0)
+                j1 = np.where(anc_app_1, j1 * 0.5, j1)
 
                 self.vel[app_idx, 0] -= (j0[:, None] / self.mass) * app_normals
                 self.vel[app_idx, 1] += (j1[:, None] / self.mass) * app_normals
@@ -380,12 +400,18 @@ class VectorArenaEnv:
 
         infos = [{"done": bool(d), "winner": "agent_0" if w0 else ("agent_1" if w1 else None)} for d, w0, w1 in zip(dones, win_0, win_1)]
 
-        obs = self.get_observations()
+        # Collect terminal observations for completed environments before reset
+        terminal_obs = self.get_observations()
 
         # Auto-reset completed environments
         done_indices = np.where(dones)[0]
         if len(done_indices) > 0:
+            for d_idx in done_indices:
+                infos[d_idx]["terminal_observation"] = terminal_obs[d_idx]
             self.reset(done_indices)
+
+        # Observations for continuing execution (reset envs show fresh spawn observations)
+        obs = self.get_observations()
 
         return obs, rewards, dones, infos
 
@@ -487,9 +513,9 @@ class VectorArenaEnv:
             s1 = -h_o - sq_disc
             s2 = -h_o + sq_disc
             s_cand = np.where(s1 > 1e-4, s1, np.where(s2 > 1e-4, s2, np.inf))
-            s_opp = s_cand
+            s_opp = np.where(valid_o, s_cand, np.inf)
 
-        mask_opp = (s_opp > 1e-4) & (s_opp < best_dist)
+        mask_opp = valid_o & (s_opp > 1e-4) & (s_opp < best_dist)
         best_dist[mask_opp] = s_opp[mask_opp]
         hit_types[mask_opp] = 1.0
 

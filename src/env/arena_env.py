@@ -48,6 +48,10 @@ class KineticSumoEnv(ParallelEnv):
             shrink_start_time=self.map_preset.shrink_start_time,
             round_duration=self.max_duration,
             dt=self.dt,
+            surface_friction=getattr(self.map_preset, "surface_friction", 1.0),
+            shrink_mode=getattr(self.map_preset, "shrink_mode", "continuous"),
+            step_interval=getattr(self.map_preset, "step_interval", 5.0),
+            step_drop_amount=getattr(self.map_preset, "step_drop_amount", 1.5),
         )
         self.raycast = RaycastEngine(num_rays=16, max_range=self.map_preset.initial_radius * 2.5)
         self.reward_calc = RewardCalculator(gamma=self.gamma, max_speed=15.0)
@@ -84,8 +88,11 @@ class KineticSumoEnv(ParallelEnv):
         self.winner: str | None = None
         self.is_draw = False
 
-        # Lazy renderer
+        # Lazy renderer for offscreen modes, immediate for human window
         self._renderer = None
+        if self.render_mode == "human":
+            from src.ui.renderer import SumoRenderer
+            self._renderer = SumoRenderer(arena_map=self.map_preset, mode=self.render_mode)
 
     def observation_space(self, agent: str) -> spaces.Box:
         return self._obs_space
@@ -292,7 +299,14 @@ class KineticSumoEnv(ParallelEnv):
 
         return observations, rewards, terminations, truncations, infos
 
-    def render(self) -> np.ndarray | None:
+    def render(
+        self,
+        round_scores: tuple[int, int] = (0, 0),
+        rounds_to_win: int = 3,
+        agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
+        subtitle: str | None = None,
+        fps: int | None = None,
+    ) -> np.ndarray | None:
         """Render the environment using Pygame-CE renderer."""
         if self.render_mode is None:
             return None
@@ -308,6 +322,11 @@ class KineticSumoEnv(ParallelEnv):
             last_collision=self.last_collision,
             winner=self.winner,
             is_draw=self.is_draw,
+            round_scores=round_scores,
+            rounds_to_win=rounds_to_win,
+            agent_names=agent_names,
+            subtitle=subtitle,
+            fps=fps,
         )
 
     def close(self) -> None:

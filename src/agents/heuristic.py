@@ -68,12 +68,13 @@ class HeuristicAgent(BaseAgent):
 
         # 2. ANCHOR BRACING STATE (Defensive response)
         # If opponent is very close and closing in fast while self is facing away (risk of flank hit)
-        rel_speed_towards_self = -(vel_x * dvx + vel_y * dvy) / max(1.0, dist_opp)
+        rel_speed_towards_self = -(dx * dvx + dy * dvy) / max(1.0, dist_opp)
         ang_to_opp = np.arctan2(dy, dx)
         ang_err_opp = (ang_to_opp - heading + np.pi) % (2.0 * np.pi) - np.pi
 
         if dist_opp < 2.0 and abs(ang_err_opp) > np.pi / 3.0 and rel_speed_towards_self > 3.0:
             # Brace with Anchor to absorb incoming blow!
+            self.prev_angle_error = float(ang_err_opp)
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
         # 3. INTERCEPT & OFFENSE STATE
@@ -87,6 +88,7 @@ class HeuristicAgent(BaseAgent):
 
         # PD steering controller
         steer = np.clip(self.kp * ang_err - self.kd * omega, -1.0, 1.0)
+        self.prev_angle_error = float(ang_err)
 
         # Thrust and dash decision
         if abs(ang_err) < 0.35:

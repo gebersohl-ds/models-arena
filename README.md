@@ -100,8 +100,11 @@ python -m pytest -v
 
 ### Run Benchmarking & Elo Tournament
 ```bash
-# Automated round-robin Elo rating ladder (K=32)
+# Automated round-robin Elo rating ladder (headless fast mode, K=32)
 python -m src.eval.tournament --matches-per-pair 10 --map Open
+
+# Watch tournament matches live visually in Pygame-CE window!
+python -m src.eval.tournament --matches-per-pair 2 --map Pinball --render --fps 50
 ```
 
 ### Training Pipelines
@@ -114,23 +117,34 @@ python -m src.training.train_ga --pop-size 64 --generations 20 --map Open
 python -m src.training.train_ppo --timesteps 50000 --num-envs 16 --map Open
 ```
 
-### Interactive Human & AI Play (Pygame-CE)
+### Interactive Arcade Hub & Human / AI Play (Pygame-CE)
 
 ```bash
-# Human vs Heuristic Bot
-python -m src.ui.play --agent0 human --agent1 heuristic --map Open
+# 1. Launch Interactive Arcade Hub (Main Menu, Bot Locker, Map Showcase, Tournament)
+python -m src.ui.play
 
-# AI vs AI (Watch PPO vs Heuristic on Pinball arena)
-python -m src.ui.play --agent0 ppo --agent1 heuristic --map Pinball
+# 2. Direct 1v1 Duel (Human vs Bulldozer on Colosseum)
+python -m src.ui.play --agent0 human --agent1 bulldozer --map Colosseum
 
-# Map choices: Open, Sanctuary, Pinball, Atolls
+# 3. 4-Way Battle Royale FFA (Last Disc Standing)
+python -m src.ui.play --4way --map Crossfire
+
+# 4. Watch Full AI Tournament visually from launcher
+python -m src.ui.play --tournament --matches-per-pair 2 --map Open
+
+# Arena Maps: Open, Sanctuary, Pinball, Atolls, Colosseum, Crossfire
+# Bot Roster: human, heuristic, bulldozer, shinobi, guardian, tunable, ga, ppo, random
 ```
 
 **Controls**:
-- `W` / `S`: Forward Drive / Reverse Brake
-- `A` / `D`: Steer Counter-Clockwise / Clockwise
-- `Space`: Dash Burst (2x speed, locked steering)
-- `Shift`: Anchor Brace (4x friction, absorbs hits)
-- `L`: Toggle 16-ray Lidar debug overlay
-- `R`: Reset match
-- `ESC`: Quit
+- **Player 1 (Cyan)**: `W`/`S` (Drive/Brake), `A`/`D` (Steer CCW/CW), `Space` (Dash burst), `LShift` (Anchor brace)
+- **Player 2 (Orange)**: `Up`/`Down` (Drive/Brake), `Left`/`Right` (Steer), `Return`/`RCtrl` (Dash), `RShift` (Anchor)
+- **General Hotkeys**:
+  - `M`: Toggle Procedural Audio (Mute/Unmute)
+  - `L`: Toggle 16-ray Lidar debug overlay
+  - `R`: Reset current round / match
+  - `ESC`: Return to Hub Menu / Exit
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).

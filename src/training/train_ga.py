@@ -1,59 +1,108 @@
-"""Genetic Algorithm (Neuroevolution) training pipeline for Kinetic Sumo."""
-
 import os
+import sys
+from pathlib import Path
 import argparse
 import time
+import multiprocessing as mp
 import numpy as np
+
+# Ensure repository root is on sys.path for direct CLI execution
+_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from src.agents.ga_mlp import GAMLP
 from src.agents.heuristic import HeuristicAgent
 from src.env.vector_env import VectorArenaEnv
 
 
-def evaluate_population_vectorized(
+def _evaluate_individual_worker(
+    ind_weights: np.ndarray,
+    opp_specs: list[tuple[str, np.ndarray | None]],
+    num_matches: int,
+    map_name: str,
+    max_steps: int,
+) -> float:
+    """Worker function executing matches for a single individual in a separate process."""
+    ind = GAMLP(weights=ind_weights)
+    opponents = []
+    for opp_type, opp_w in opp_specs:
+        if opp_type == "heuristic":
+            opponents.append(HeuristicAgent())
+        else:
+            opponents.append(GAMLP(weights=opp_w))
+
+    env = VectorArenaEnv(num_envs=1, map_name=map_name)
+    total_score = 0.0
+
+    for m in range(num_matches):
+        opp = opponents[m % len(opponents)]
+        obs = env.reset()
+        match_score = 0.0
+
+        for _ in range(max_steps):
+            act_0 = ind.act(obs[0, 0])
+            act_1 = opp.act(obs[0, 1])
+            actions = np.stack([[act_0, act_1]], axis=0)
+            obs, rewards, dones, infos = env.step(actions)
+
+            match_score += float(rewards[0, 0])
+            if dones[0]:
+                if infos[0].get("winner") == "agent_0":
+                    match_score += 10.0
+                elif infos[0].get("winner") == "agent_1":
+                    match_score -= 10.0
+                break
+
+        total_score += match_score
+
+    return float(total_score / num_matches)
+
+
+def evaluate_population_multiprocessing(
     population: list[GAMLP],
     opponent_pool: list,
     num_matches_per_ind: int = 4,
     map_name: str = "Open",
     max_steps: int = 500,
+    num_workers: int | None = None,
 ) -> np.ndarray:
-    """Evaluate an entire population of GAMLP agents against opponent pool using VectorArenaEnv."""
+    """Evaluate population using multiprocessing over CPU cores."""
     pop_size = len(population)
-    fitnesses = np.zeros(pop_size, dtype=np.float32)
+    if num_workers is None:
+        num_workers = min(os.cpu_count() or 4, pop_size, 8)
 
-    # For each individual, evaluate across multiple matches against opponent pool
-    for i, ind in enumerate(population):
-        total_score = 0.0
-        for m in range(num_matches_per_ind):
-            # Select opponent (alternate heuristic and random pool opponents)
-            opp = opponent_pool[m % len(opponent_pool)]
+    # Serialize opponents for cross-process compatibility
+    opp_specs = []
+    for opp in opponent_pool:
+        if isinstance(opp, HeuristicAgent):
+            opp_specs.append(("heuristic", None))
+        elif isinstance(opp, GAMLP):
+            opp_specs.append(("ga", opp.get_weights()))
+        else:
+            opp_specs.append(("heuristic", None))
 
-            # Run a single vectorized duel using a 1-env VectorArenaEnv or direct match
-            env = VectorArenaEnv(num_envs=1, map_name=map_name)
-            obs = env.get_observations()  # (1, 2, 46)
+    tasks = [
+        (ind.get_weights(), opp_specs, num_matches_per_ind, map_name, max_steps)
+        for ind in population
+    ]
 
-            match_score = 0.0
-            for _ in range(max_steps):
-                # Agent 0 is the GA individual, Agent 1 is opponent
-                act_0 = ind.act(obs[0, 0])
-                act_1 = opp.act(obs[0, 1])
+    if num_workers > 1:
+        try:
+            with mp.Pool(processes=num_workers) as pool:
+                fitnesses = pool.starmap(_evaluate_individual_worker, tasks)
+            return np.array(fitnesses, dtype=np.float32)
+        except Exception as e:
+            # Fallback to sequential evaluation if multiprocessing fails
+            print(f"[Warning] Multiprocessing fallback to sequential: {e}")
 
-                actions = np.stack([[act_0, act_1]], axis=0)  # (1, 2, 3)
-                obs, rewards, dones, infos = env.step(actions)
+    # Sequential fallback
+    fitnesses = [_evaluate_individual_worker(*task) for task in tasks]
+    return np.array(fitnesses, dtype=np.float32)
 
-                match_score += rewards[0, 0]
-                if dones[0]:
-                    # Win bonus / loss penalty
-                    if infos[0].get("winner") == "agent_0":
-                        match_score += 10.0
-                    elif infos[0].get("winner") == "agent_1":
-                        match_score -= 10.0
-                    break
 
-            total_score += match_score
-
-        fitnesses[i] = total_score / num_matches_per_ind
-
-    return fitnesses
+# Backwards compatibility alias
+evaluate_population_vectorized = evaluate_population_multiprocessing
 
 
 def train_ga(
@@ -64,6 +113,7 @@ def train_ga(
     mutation_sigma: float = 0.12,
     save_dir: str = "checkpoints/ga",
     map_name: str = "Open",
+    num_workers: int | None = None,
 ) -> GAMLP:
     """Run Genetic Algorithm neuroevolution loop with truncation selection & Gaussian perturbation."""
     os.makedirs(save_dir, exist_ok=True)
@@ -84,9 +134,14 @@ def train_ga(
     for gen in range(1, generations + 1):
         gen_start = time.perf_counter()
 
-        # Evaluate population
-        fitnesses = evaluate_population_vectorized(
-            population, opponent_pool, num_matches_per_ind=2, map_name=map_name, max_steps=400
+        # Evaluate population using multiprocessing
+        fitnesses = evaluate_population_multiprocessing(
+            population,
+            opponent_pool,
+            num_matches_per_ind=2,
+            map_name=map_name,
+            max_steps=400,
+            num_workers=num_workers,
         )
 
         # Sort descending by fitness

@@ -1,4 +1,5 @@
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *$py.class
 *.so
@@ -10,3 +11,4 @@ build/
 *.egg-info/
 .eggs/
 checkpoints/league/
+

@@ -136,7 +136,20 @@ def play_single_round(
         )
 
     paused = False
+    step_once = False
     interrupted = False
+
+    def _build_xray() -> dict[str, dict]:
+        return {
+            "agent_0": {
+                "intent": getattr(agent_0, "last_intent", agent_0.__class__.__name__.replace("Agent", "").upper()),
+                "target_vec": getattr(agent_0, "target_vec", None),
+            },
+            "agent_1": {
+                "intent": getattr(agent_1, "last_intent", agent_1.__class__.__name__.replace("Agent", "").upper()),
+                "target_vec": getattr(agent_1, "target_vec", None),
+            },
+        }
 
     while True:
         if render:
@@ -148,30 +161,40 @@ def play_single_round(
                     if event.key == pygame.K_ESCAPE:
                         interrupted = True
                         break
-                    elif event.key == pygame.K_SPACE:
+                    elif event.key in (pygame.K_SPACE, pygame.K_p):
                         paused = not paused
+                    elif event.key in (pygame.K_PERIOD, pygame.K_n):
+                        paused = True
+                        step_once = True
                     elif event.key == pygame.K_l:
                         if env._renderer is not None:
                             env._renderer.show_lidar_overlay = not env._renderer.show_lidar_overlay
-                    elif event.key in (pygame.K_f, pygame.K_UP):
+                    elif event.key == pygame.K_i:
+                        if env._renderer is not None:
+                            env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                    elif event.key in (pygame.K_f, pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_RIGHTBRACKET):
                         fps = min(200, fps + 25)
-                    elif event.key == pygame.K_DOWN:
-                        fps = max(25, fps - 25)
+                    elif event.key in (pygame.K_DOWN, pygame.K_MINUS, pygame.K_LEFTBRACKET):
+                        fps = max(15, fps - 25)
 
             if interrupted:
                 break
 
-            if paused:
+            if paused and not step_once:
                 env.render(
                     round_scores=round_scores,
                     rounds_to_win=rounds_to_win,
                     agent_names=agent_names,
-                    subtitle=f"{subtitle} [PAUSED - Space to resume]" if subtitle else "[PAUSED - Space to resume]",
+                    subtitle=f"{subtitle} [PAUSED - P/Space to resume, . to step]" if subtitle else "[PAUSED - P/Space to resume, . to step]",
                     fps=fps,
+                    xray_info=_build_xray(),
+                    sim_status=f"PAUSED ({fps / 50.0:.2f}x)",
                 )
                 if clock:
                     clock.tick(20)
                 continue
+
+            step_once = False
 
         act_0 = agent_0.act(obs["agent_0"])
         act_1 = agent_1.act(obs["agent_1"])
@@ -187,6 +210,8 @@ def play_single_round(
                 agent_names=agent_names,
                 subtitle=subtitle,
                 fps=fps,
+                xray_info=_build_xray(),
+                sim_status=f"SPEED:{fps / 50.0:.2f}x",
             )
 
         if terminations.get("agent_0", False) or truncations.get("agent_0", False):
@@ -210,10 +235,12 @@ def play_single_round(
                         elif event.type == pygame.KEYDOWN:
                             if event.key == pygame.K_l and env._renderer is not None:
                                 env._renderer.show_lidar_overlay = not env._renderer.show_lidar_overlay
-                            elif event.key in (pygame.K_f, pygame.K_UP):
+                            elif event.key == pygame.K_i and env._renderer is not None:
+                                env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                            elif event.key in (pygame.K_f, pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS):
                                 fps = min(200, fps + 25)
-                            elif event.key == pygame.K_DOWN:
-                                fps = max(25, fps - 25)
+                            elif event.key in (pygame.K_DOWN, pygame.K_MINUS):
+                                fps = max(15, fps - 25)
                     if interrupted:
                         break
                     env.render(
@@ -222,6 +249,8 @@ def play_single_round(
                         agent_names=agent_names,
                         subtitle=subtitle,
                         fps=fps,
+                        xray_info=_build_xray(),
+                        sim_status=f"SPEED:{fps / 50.0:.2f}x",
                     )
 
             if close_env:

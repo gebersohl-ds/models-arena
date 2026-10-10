@@ -43,6 +43,7 @@ class SumoRenderer:
         self.mode = mode
         self.fps = fps
         self.show_lidar_overlay = True
+        self.show_xray_overlay = True
 
         # Scale: arena radius (10m) maps to ~400 pixels
         self.scale = (self.screen_size / 2.0 - 40.0) / self.arena_map.initial_radius
@@ -66,6 +67,7 @@ class SumoRenderer:
         self.font = pygame.font.SysFont("Consolas", 16, bold=True)
         self.title_font = pygame.font.SysFont("Consolas", 24, bold=True)
         self.small_font = pygame.font.SysFont("Consolas", 12)
+        self.tiny_font = pygame.font.SysFont("Consolas", 11)
 
         self.particles: list[Particle] = []
         self.audio = SoundEngine(enabled=(self.mode == "human"))
@@ -90,6 +92,118 @@ class SumoRenderer:
             lifetime = np.random.uniform(0.15, 0.45)
             self.particles.append(Particle(pos, vel, color, lifetime, radius=np.random.uniform(2, 4)))
 
+    def _draw_xray_intent_vectors(
+        self,
+        agents: dict[str, DiscAgent],
+        agent_colors: dict[str, tuple[int, int, int]],
+        last_actions: dict[str, np.ndarray] | None = None,
+        xray_info: dict[str, dict] | None = None,
+    ) -> None:
+        """Draw AI X-Ray target aim / intercept vectors and reticles on the arena floor."""
+        if not self.show_xray_overlay:
+            return
+        for a_id, agent in agents.items():
+            if not agent.alive:
+                continue
+            clr = agent_colors.get(a_id, (0, 210, 255))
+            info = (xray_info or {}).get(a_id, {})
+            t_vec = info.get("target_vec")
+            if t_vec is None and last_actions and a_id in last_actions:
+                act = last_actions[a_id]
+                aim_ang = agent.angle + float(act[1]) * 0.65
+                mag = max(1.2, abs(float(act[0])) * 3.2)
+                t_vec = np.array([np.cos(aim_ang) * mag, np.sin(aim_ang) * mag], dtype=np.float32)
+
+            if t_vec is not None:
+                t_vec_arr = np.asarray(t_vec, dtype=np.float32)
+                norm = float(np.linalg.norm(t_vec_arr))
+                if norm > 0.2:
+                    # Clamp visual vector length to 4.5m so it stays clean inside the arena
+                    if norm > 4.5:
+                        t_vec_arr = t_vec_arr * (4.5 / norm)
+                    ax, ay = self.world_to_screen(agent.pos)
+                    tx, ty = self.world_to_screen(agent.pos + t_vec_arr)
+                    pygame.draw.line(self.screen, clr, (ax, ay), (tx, ty), 2)
+                    pygame.draw.circle(self.screen, clr, (tx, ty), 5, 1)
+
+    def _draw_agent_xray_panel(
+        self,
+        agent_id: str,
+        x: int,
+        y: int,
+        color: tuple[int, int, int],
+        last_actions: dict[str, np.ndarray] | None = None,
+        reward_breakdowns: dict[str, dict[str, float]] | None = None,
+        xray_info: dict[str, dict] | None = None,
+    ) -> None:
+        """Render compact behind-the-scenes AI X-Ray actuator gauges, decision state, and step rewards."""
+        if not self.show_xray_overlay:
+            return
+
+        panel_w = 200
+        panel_h = 74
+        panel_rect = pygame.Rect(x, y, panel_w, panel_h)
+        pygame.draw.rect(self.screen, (18, 22, 32), panel_rect, border_radius=5)
+        pygame.draw.rect(self.screen, (45, 55, 78), panel_rect, 1, border_radius=5)
+
+        act = (last_actions or {}).get(agent_id, np.zeros(3, dtype=np.float32))
+        info = (xray_info or {}).get(agent_id, {})
+        intent = info.get("intent")
+        if not intent:
+            if float(act[2]) > 0.5:
+                intent = "ACT: DASH SURGE"
+            elif float(act[2]) < -0.5:
+                intent = "ACT: ANCHOR BRACE"
+            elif float(act[0]) > 0.4:
+                intent = "ACT: FORWARD DRIVE"
+            elif float(act[0]) < -0.2:
+                intent = "ACT: REVERSE BRAKE"
+            else:
+                intent = "ACT: IDLE / COAST"
+
+        intent_surf = self.tiny_font.render(f"AI: {str(intent)[:22]}", True, color)
+        self.screen.blit(intent_surf, (x + 6, y + 4))
+
+        # 3 Bidirectional Actuator Gauges: THR, STR, ABL
+        labels = [("THR", float(act[0]), (50, 220, 130)), ("STR", float(act[1]), (0, 200, 255)), ("ABL", float(act[2]), (255, 195, 50))]
+        for idx, (lbl_txt, val, bar_col) in enumerate(labels):
+            by = y + 20 + idx * 12
+            l_surf = self.tiny_font.render(lbl_txt, True, (150, 165, 190))
+            self.screen.blit(l_surf, (x + 6, by - 1))
+
+            track_x = x + 34
+            track_w = 122
+            track_h = 7
+            mid_x = track_x + track_w // 2
+            pygame.draw.rect(self.screen, (30, 36, 48), (track_x, by + 2, track_w, track_h), border_radius=2)
+
+            v_clamped = float(np.clip(val, -1.0, 1.0))
+            fill_len = int(abs(v_clamped) * (track_w // 2))
+            if v_clamped >= 0:
+                pygame.draw.rect(self.screen, bar_col, (mid_x, by + 2, fill_len, track_h), border_radius=2)
+            else:
+                neg_col = (255, 95, 95) if lbl_txt != "ABL" else (180, 130, 255)
+                pygame.draw.rect(self.screen, neg_col, (mid_x - fill_len, by + 2, fill_len, track_h), border_radius=2)
+
+            # Center zero tick
+            pygame.draw.line(self.screen, (200, 210, 230), (mid_x, by + 1), (mid_x, by + track_h + 2), 1)
+            # Threshold ticks for ABL (-0.5 Anchor, +0.5 Dash)
+            if lbl_txt == "ABL":
+                t_neg = mid_x - track_w // 4
+                t_pos = mid_x + track_w // 4
+                pygame.draw.line(self.screen, (140, 140, 165), (t_neg, by + 1), (t_neg, by + track_h + 2), 1)
+                pygame.draw.line(self.screen, (140, 140, 165), (t_pos, by + 1), (t_pos, by + track_h + 2), 1)
+
+            v_surf = self.tiny_font.render(f"{v_clamped:+.2f}", True, (210, 220, 240))
+            self.screen.blit(v_surf, (track_x + track_w + 4, by - 1))
+
+        # Step reward breakdown line
+        rb = (reward_breakdowns or {}).get(agent_id)
+        if rb:
+            r_txt = f"REW:{rb.get('total', 0.0):+.2f} P:{rb.get('pbrs', 0.0):+.2f} C:{rb.get('contact', 0.0):+.2f}"
+            r_surf = self.tiny_font.render(r_txt, True, (165, 185, 215))
+            self.screen.blit(r_surf, (x + 6, y + 57))
+
     def render_frame(
         self,
         agents: dict[str, DiscAgent],
@@ -103,6 +217,10 @@ class SumoRenderer:
         agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
         subtitle: str | None = None,
         fps: int | None = None,
+        last_actions: dict[str, np.ndarray] | None = None,
+        reward_breakdowns: dict[str, dict[str, float]] | None = None,
+        xray_info: dict[str, dict] | None = None,
+        sim_status: str | None = None,
     ) -> np.ndarray | None:
         """Render a single frame."""
         if fps is not None and fps > 0:
@@ -229,6 +347,8 @@ class SumoRenderer:
             "agent_1": (255, 87, 34),   # Bright Orange
         }
 
+        self._draw_xray_intent_vectors(agents, agent_colors, last_actions, xray_info)
+
         for a_id, agent in agents.items():
             if not agent.alive:
                 continue
@@ -320,6 +440,10 @@ class SumoRenderer:
             rounds_to_win,
             agent_names,
             subtitle,
+            last_actions=last_actions,
+            reward_breakdowns=reward_breakdowns,
+            xray_info=xray_info,
+            sim_status=sim_status,
         )
 
         if self.mode == "human":
@@ -342,6 +466,10 @@ class SumoRenderer:
         rounds_to_win: int = 3,
         agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
         subtitle: str | None = None,
+        last_actions: dict[str, np.ndarray] | None = None,
+        reward_breakdowns: dict[str, dict[str, float]] | None = None,
+        xray_info: dict[str, dict] | None = None,
+        sim_status: str | None = None,
     ) -> None:
         # Match timer
         time_left = max(0.0, self.arena_map.round_duration - elapsed_time)
@@ -374,12 +502,23 @@ class SumoRenderer:
         if ag0:
             name0 = agent_names[0] if len(agent_names) > 0 else "AGENT 0"
             self._draw_agent_bars(ag0, 30, 20, f"{name0} (Cyan)", (0, 210, 255))
+            self._draw_agent_xray_panel("agent_0", 30, 88, (0, 210, 255), last_actions, reward_breakdowns, xray_info)
 
         # Agent 1 Bar (Right)
         ag1 = agents.get("agent_1")
         if ag1:
             name1 = agent_names[1] if len(agent_names) > 1 else "AGENT 1"
             self._draw_agent_bars(ag1, self.screen_size - 240, 20, f"{name1} (Orange)", (255, 87, 34))
+            self._draw_agent_xray_panel("agent_1", self.screen_size - 240, 88, (255, 87, 34), last_actions, reward_breakdowns, xray_info)
+
+        # Bottom Controls & Simulation Status Strip
+        lidar_state = "ON" if self.show_lidar_overlay else "OFF"
+        xray_state = "ON" if self.show_xray_overlay else "OFF"
+        status_suffix = f"  |  {sim_status}" if sim_status else ""
+        ctrl_str = f"[L] Lidar:{lidar_state}  [I] AI X-Ray:{xray_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
+        ctrl_col = (255, 215, 70) if sim_status and ("PAUSED" in sim_status or "x" in sim_status and "1.0x" not in sim_status) else (130, 145, 175)
+        ctrl_surf = self.tiny_font.render(ctrl_str, True, ctrl_col)
+        self.screen.blit(ctrl_surf, (self.screen_size // 2 - ctrl_surf.get_width() // 2, self.screen_size - 22))
 
         # Winner / Game Over Banner
         if winner or is_draw:
@@ -447,6 +586,9 @@ class SumoRenderer:
         agent_names: tuple[str, str, str, str] = ("P1 (CYAN)", "P2 (ORANGE)", "P3 (MAGENTA)", "P4 (EMERALD)"),
         subtitle: str | None = None,
         fps: int | None = None,
+        last_actions: dict[str, np.ndarray] | None = None,
+        xray_info: dict[str, dict] | None = None,
+        sim_status: str | None = None,
     ) -> np.ndarray | None:
         """Render a single frame for 4-Way Battle Royale."""
         if fps is not None and fps > 0:
@@ -573,6 +715,8 @@ class SumoRenderer:
             cur_r = max(1, int(p.radius * alpha_ratio))
             pygame.draw.circle(self.screen, p.color, (px, py), cur_r)
 
+        self._draw_xray_intent_vectors(agents, colors_4way, last_actions, xray_info)
+
         # Agents
         for a_id, agent in agents.items():
             if not agent.alive:
@@ -619,8 +763,8 @@ class SumoRenderer:
         corner_coords = [
             (25, 20),                                # agent_0: top-left
             (self.screen_size - 225, 20),           # agent_1: top-right
-            (25, self.screen_size - 75),            # agent_2: bottom-left
-            (self.screen_size - 225, self.screen_size - 75),  # agent_3: bottom-right
+            (25, self.screen_size - 95),            # agent_2: bottom-left
+            (self.screen_size - 225, self.screen_size - 95),  # agent_3: bottom-right
         ]
         agent_keys = ["agent_0", "agent_1", "agent_2", "agent_3"]
         for idx, ak in enumerate(agent_keys):
@@ -628,6 +772,14 @@ class SumoRenderer:
                 cx, cy = corner_coords[idx]
                 lbl = agent_names[idx] if idx < len(agent_names) else ak.upper()
                 self._draw_agent_bars(agents[ak], cx, cy, lbl, colors_4way[ak])
+                if self.show_xray_overlay and idx < 2:
+                    self._draw_agent_xray_panel(ak, cx, cy + 68, colors_4way[ak], last_actions, None, xray_info)
+
+        xray_state = "ON" if self.show_xray_overlay else "OFF"
+        status_suffix = f"  |  {sim_status}" if sim_status else ""
+        ctrl_str = f"[I] AI X-Ray:{xray_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
+        ctrl_surf = self.tiny_font.render(ctrl_str, True, (140, 155, 185))
+        self.screen.blit(ctrl_surf, (self.screen_size // 2 - ctrl_surf.get_width() // 2, self.screen_size - 20))
 
         # Elimination / Winner banner
         if winner or is_draw:

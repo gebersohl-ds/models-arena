@@ -14,9 +14,13 @@ class HeuristicAgent(BaseAgent):
         self.kp = float(kp)
         self.kd = float(kd)
         self.prev_angle_error = 0.0
+        self.last_intent: str = "PD INTERCEPT"
+        self.target_vec: np.ndarray | None = None
 
     def reset(self) -> None:
         self.prev_angle_error = 0.0
+        self.last_intent = "PD INTERCEPT"
+        self.target_vec = None
 
     def act(self, obs: np.ndarray) -> np.ndarray:
         """Process 46-dim observation and compute [thrust, steer, ability] action."""
@@ -54,6 +58,8 @@ class HeuristicAgent(BaseAgent):
             target_angle = np.arctan2(-pos_y, -pos_x)
             ang_err = (target_angle - heading + np.pi) % (2.0 * np.pi) - np.pi
             steer = np.clip(self.kp * ang_err - self.kd * omega, -1.0, 1.0)
+            self.last_intent = "EDGE RETREAT"
+            self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
 
             # If facing somewhat toward center, drive hard
             if abs(ang_err) < np.pi / 2.0:
@@ -75,6 +81,8 @@ class HeuristicAgent(BaseAgent):
         if dist_opp < 2.0 and abs(ang_err_opp) > np.pi / 3.0 and rel_speed_towards_self > 3.0:
             # Brace with Anchor to absorb incoming blow!
             self.prev_angle_error = float(ang_err_opp)
+            self.last_intent = "ANCHOR BRACE"
+            self.target_vec = np.array([dx, dy], dtype=np.float32)
             return np.array([0.0, 0.0, -1.0], dtype=np.float32)
 
         # 3. INTERCEPT & OFFENSE STATE
@@ -82,6 +90,7 @@ class HeuristicAgent(BaseAgent):
         t_lead = np.clip(dist_opp / 12.0, 0.05, 0.4)
         pred_target_x = dx + dvx * t_lead
         pred_target_y = dy + dvy * t_lead
+        self.target_vec = np.array([pred_target_x, pred_target_y], dtype=np.float32)
 
         target_angle = np.arctan2(pred_target_y, pred_target_x)
         ang_err = (target_angle - heading + np.pi) % (2.0 * np.pi) - np.pi
@@ -97,15 +106,19 @@ class HeuristicAgent(BaseAgent):
             # Conditional dash: execute dash if locked on within effective attack range
             if 1.5 < dist_opp < 6.5 and abs(ang_err) < 0.18 and energy >= 40.0 and dash_cooldown <= 0.0:
                 ability = 1.0  # Dash burst!
+                self.last_intent = "DASH STRIKE"
             else:
                 ability = 0.0
+                self.last_intent = "LEAD INTERCEPT"
         elif abs(ang_err) < np.pi / 2.0:
             # Moderate alignment: moderate thrust
             thrust = 0.6
             ability = 0.0
+            self.last_intent = "PURSUIT TRACK"
         else:
             # Off target: brake/reverse slightly to rotate on axis
             thrust = -0.3
             ability = 0.0
+            self.last_intent = "AXIS PIVOT"
 
         return np.array([thrust, steer, ability], dtype=np.float32)

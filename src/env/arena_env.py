@@ -85,6 +85,10 @@ class KineticSumoEnv(ParallelEnv):
         self.elapsed_time = 0.0
         self.step_count = 0
         self.last_collision = CollisionResult()
+        self.last_actions: dict[str, np.ndarray] = {
+            "agent_0": np.zeros(3, dtype=np.float32),
+            "agent_1": np.zeros(3, dtype=np.float32),
+        }
         self.winner: str | None = None
         self.is_draw = False
 
@@ -114,6 +118,10 @@ class KineticSumoEnv(ParallelEnv):
         self.winner = None
         self.is_draw = False
         self.last_collision = CollisionResult()
+        self.last_actions = {
+            "agent_0": np.zeros(3, dtype=np.float32),
+            "agent_1": np.zeros(3, dtype=np.float32),
+        }
 
         # Spawns from map preset
         (p0, a0), (p1, a1) = self.map_preset.get_spawn_transforms()
@@ -217,7 +225,8 @@ class KineticSumoEnv(ParallelEnv):
 
         # 1. Apply controls to both agents
         for agent_id in self.agents:
-            act = actions.get(agent_id, np.zeros(3, dtype=np.float32))
+            act = np.asarray(actions.get(agent_id, np.zeros(3, dtype=np.float32)), dtype=np.float32)
+            self.last_actions[agent_id] = act.copy()
             self.physics.apply_agent_controls(self.agent_objs[agent_id], act)
 
         # 2. Resolve inter-agent collision
@@ -306,6 +315,8 @@ class KineticSumoEnv(ParallelEnv):
         agent_names: tuple[str, str] = ("AGENT 0", "AGENT 1"),
         subtitle: str | None = None,
         fps: int | None = None,
+        xray_info: dict[str, dict[str, Any]] | None = None,
+        sim_status: str | None = None,
     ) -> np.ndarray | None:
         """Render the environment using Pygame-CE renderer."""
         if self.render_mode is None:
@@ -327,6 +338,10 @@ class KineticSumoEnv(ParallelEnv):
             agent_names=agent_names,
             subtitle=subtitle,
             fps=fps,
+            last_actions=self.last_actions,
+            reward_breakdowns=self.reward_calc.last_breakdown,
+            xray_info=xray_info,
+            sim_status=sim_status,
         )
 
     def close(self) -> None:

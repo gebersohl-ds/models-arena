@@ -31,10 +31,18 @@ Built for high throughput on standard CPU hardware with **pure NumPy vectorized 
 ## 1. Key Features
 
 * **Pure NumPy Vectorized 2D Physics Engine**: Deterministic elastic disc collisions, angular momentum damping, directional $120^\circ$ front bumper shields, flank/rear impulse multipliers, and vectorized 16-ray Lidar raycasting.
-* **Progressive ML Hierarchy & Tactical Archetypes**:
+* **Progressive ML Hierarchy & 7 Tactical Archetypes**:
   * **ML Progression**: Climb from `Rookie_Bot` ($\sim 960$ Elo) $\rightarrow$ `Contender_Bot` ($\sim 1250$ Elo) $\rightarrow$ `Apex_Champion` ($\sim 1495$ Elo), alongside `SelfPlay_PPO` and `Neuroevolution_GA`.
-  * **Tactical Bots**: `Bulldozer` (hyper-aggressive rammer), `Shinobi` (evasive flanker), `Guardian` (center-ring anchor), and user-customizable `Tunable` bots.
-* **Interactive Evolution Lab (`EVO LAB`)**: Breed, mutate, and evaluate neural network populations live inside the GUI—step 1 generation at a time, turbo-evolve 10 generations headlessly, inspect live fitness curves, and export champion policies directly into the tournament roster.
+  * **Tactical Bots**: `Bulldozer` (hyper-aggressive rammer), `Shinobi` (evasive flanker), `Guardian` (center-ring anchor), `Matador` (edge-baiter & perpendicular juke-dash bullfighter), `Ricochet` (16-ray Lidar obstacle weaver & pinball bumper herder), `Chameleon` (dynamic 3-stance counter-fighter), and user-customizable `Tunable` bots with savable presets.
+* **Behind-the-Scenes AI X-Ray & Genome Telemetry**:
+  * **Live Match AI X-Ray Overlay (`I` key)**: Real-time HUD telemetry displaying each bot's active tactical state/intent, arena aim vectors, bidirectional `THR` / `STR` / `ABL` actuator gauges (with `-0.5` Anchor and `+0.5` Dash trigger ticks), and live PBRS vs. contact reward breakdown.
+  * **Champion Genome Sensory & Synapse Heatmap (`EVO LAB`)**: Visualizes the evolved neural network's L1 sensory group importance (`Self Kinematics`, `Opponent Rel`, `Resources`, `16-Ray Lidar`) alongside a 46-channel input synapse salience heatmap (`W1 -> 32 Hidden`).
+* **Interactive Evolution Lab (`EVO LAB`) & Pre-Training Parameter Helpers**:
+  * **Live "Under the Hood" Inspector Cards**: Hovering or dragging any hyperparameter or tuning slider in `EVO LAB` or `BOT LOCKER` displays the exact mathematical formula, physical threshold (`m`, `m/s`, $K_p$, mutated synapse count out of `2,659`), and a visual preview bar.
+  * **Pre-Training Reward Shaping Sliders**: Tune `Aggression Coeff`, `Center Safety`, and `KO Win Bonus` before breeding to steer evolution toward hyper-aggressive strikers or patient center-control sumo masters.
+* **Direct Dropdown Selectors & Simulation Time Controls**:
+  * **Interactive Dropdown Menus**: Pick fighters, human slots, custom presets, maps, sparring partners, and match lengths directly across `QUICK DUEL`, `4-WAY BRAWL`, `TOURNAMENT`, and `EVO LAB`.
+  * **Live Simulation Time Controls**: Pause (`P`), step forward 1 exact physics frame (`.`), or scale simulation speed from `0.25x` slow-motion to `4.0x` fast-forward (`-` / `+`) during any match.
 * **Deep Tournament Analytics (`ANALYTICS`)**:
   * **Head-to-Head Confusion Matrix**: Dynamic $N \times N$ heatmap displaying exact win-loss records and win percentages for every bot pairing.
   * **Elo Trajectory Timeline**: Multi-line rating progression chart across tournament matches, paired with real physical ring-out KO ratios.
@@ -196,7 +204,7 @@ python -m pytest -v
 | **Dash Burst** | `Space` | `Return` / `RCtrl` |
 | **Anchor Brace** | `LShift` | `RShift` |
 
-* **Global Hotkeys**: `TAB` (Cycle Hub Tabs), `M` (Mute/Unmute Audio), `L` (Toggle Lidar Overlay), `R` (Reset Match), `ESC` (Return to Hub / Exit).
+* **Global & Match Hotkeys**: `TAB` (Cycle Hub Tabs), `I` (Toggle AI X-Ray Telemetry Overlay), `L` (Toggle Lidar Rays), `P` (Pause/Resume Match), `.` / `N` (Step 1 Physics Frame), `-` / `+` (Adjust Sim Speed `0.25x`–`4.0x`), `M` (Mute/Unmute Audio), `R` (Reset Match), `ESC` (Return to Hub / Exit).
 
 ---
 

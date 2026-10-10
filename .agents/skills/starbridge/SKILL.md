@@ -14,14 +14,15 @@ This skill enables Antigravity to communicate with the user's paired devices (ph
 Use Starbridge when:
 1. **The user is away or requests remote notifications** ("Ping my phone", "I'm stepping away", "Notify me when tests finish").
 2. **Key architectural or destructive decisions arise** during long autonomous workflows (e.g., choosing between two major implementations, deleting data, force-pushing).
-3. **Running lengthy commands** (e.g., test suites, heavy builds, asset imports) that the user wants to monitor remotely.
+3. **Interactive interviews (such as `/grill-me`)**: Prefer `starbridge ask` over the native `ask_question` tool to send questions directly to the user's paired device.
+4. **Running lengthy commands** (e.g., test suites, heavy builds, asset imports) that the user wants to monitor remotely.
 
 ---
 
 ## 2. Asking Questions & Waiting for Decisions
 
-### Synchronous Ask (Blocks until the user taps an option)
-To ask a question and immediately wait for the user's answer:
+### Reactive Wait Pattern (Recommended for Antigravity)
+To ask a question and reactively resume as soon as the user taps an option on their device:
 
 ```powershell
 starbridge ask --question "Which physics approach should we take for dash collisions?" `
@@ -29,8 +30,11 @@ starbridge ask --question "Which physics approach should we take for dash collis
   --option "ShapeCast2D Swept" `
   --recommended "Raycast Segment" `
   --context "Raycast Segment avoids tunneling through high-speed projectiles with zero overhead." `
+  --waiting `
   --wait
 ```
+
+> **Antigravity Execution Tip**: Call `run_command` with `WaitMsBeforeAsync: 1500` when using `--waiting --wait`. This dispatches the wait into a background task, prints the decision ID immediately, and lets you post a summary of the question in chat and end your turn. The system will automatically wake you up with the user's answer as soon as they tap it.
 
 ### Options Breakdown:
 * `--question <text>`: The main question (keep concise and actionable).
@@ -79,3 +83,5 @@ To verify pairing status:
 starbridge config
 ```
 If not paired, run `starbridge pair` or `starbridge setup`.
+* **CLI Help Note**: Do not pass `--help` to subcommands (e.g., `starbridge ask --help` fails with `Unknown option '--help'`). Always run `starbridge help` to inspect CLI usage.
+

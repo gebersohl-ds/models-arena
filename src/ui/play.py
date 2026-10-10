@@ -19,6 +19,9 @@ from src.agents.tactical import (
     BulldozerAgent,
     ShinobiAgent,
     GuardianAgent,
+    MatadorAgent,
+    RicochetAgent,
+    ChameleonAgent,
     TunableAgent,
     BotConfig,
 )
@@ -28,6 +31,23 @@ from src.maps import get_map, MAP_REGISTRY
 from src.ui.renderer import SumoRenderer
 from src.env.arena_env import KineticSumoEnv
 from src.env.arena_4way_env import KineticSumo4WayEnv
+
+
+SPEED_LEVELS = [0.25, 0.5, 1.0, 2.0, 4.0]
+
+
+def extract_xray_info(agents_map: dict[str, BaseAgent | None]) -> dict[str, dict]:
+    """Extract live behind-the-scenes intent and target vector telemetry from agent instances."""
+    info: dict[str, dict] = {}
+    for a_id, bot in agents_map.items():
+        if bot is None:
+            info[a_id] = {"intent": "HUMAN PILOT", "target_vec": None}
+        else:
+            info[a_id] = {
+                "intent": getattr(bot, "last_intent", bot.__class__.__name__.replace("Agent", "").upper()),
+                "target_vec": getattr(bot, "target_vec", None),
+            }
+    return info
 
 
 def get_human_action(player_idx: int = 0) -> np.ndarray:
@@ -94,9 +114,18 @@ def load_agent(
     agent_type: str,
     checkpoint_path: str | None = None,
     custom_bot_config: BotConfig | None = None,
+    preset_configs: dict[str, BotConfig] | None = None,
 ) -> BaseAgent:
     """Factory helper to instantiate chosen agent type."""
-    agent_type = agent_type.lower()
+    raw_name = agent_type.strip()
+    if preset_configs and raw_name in preset_configs:
+        return TunableAgent(preset_configs[raw_name])
+    agent_type = raw_name.lower()
+    if preset_configs:
+        for k, cfg in preset_configs.items():
+            if k.lower() == agent_type:
+                return TunableAgent(cfg)
+
     if agent_type == "heuristic":
         return HeuristicAgent()
     elif agent_type == "bulldozer":
@@ -105,7 +134,13 @@ def load_agent(
         return ShinobiAgent()
     elif agent_type == "guardian":
         return GuardianAgent()
-    elif agent_type == "tunable":
+    elif agent_type == "matador":
+        return MatadorAgent()
+    elif agent_type == "ricochet":
+        return RicochetAgent()
+    elif agent_type == "chameleon":
+        return ChameleonAgent()
+    elif agent_type == "tunable" or agent_type.startswith("preset_"):
         return TunableAgent(custom_bot_config)
     elif agent_type == "ga":
         if checkpoint_path and os.path.exists(checkpoint_path):
@@ -134,7 +169,7 @@ def load_agent(
         return GAMLP()
     else:
         raise ValueError(
-            f"Unknown agent type '{agent_type}'. Choices: heuristic, bulldozer, shinobi, guardian, tunable, ga, ppo, random, apex, contender, rookie, evo"
+            f"Unknown agent type '{agent_type}'. Choices: heuristic, bulldozer, shinobi, guardian, matador, ricochet, chameleon, tunable, ga, ppo, random, apex, contender, rookie, evo"
         )
 
 
@@ -146,6 +181,8 @@ def run_interactive_match(
     ppo_path: str = "checkpoints/ppo/best_ppo_policy.pt",
     rounds_to_win: int = 3,
     return_to_hub: bool = False,
+    custom_bot_config: BotConfig | None = None,
+    preset_configs: dict[str, BotConfig] | None = None,
 ) -> None:
     """Run interactive 1v1 Pygame match session."""
     if not pygame.get_init():
@@ -160,8 +197,26 @@ def run_interactive_match(
     is_p1_human = "human" in agent1_type.lower()
     p1_idx = 1 if "p2" in agent1_type.lower() else 0
 
-    agent0 = None if is_p0_human else load_agent(agent0_type, ga_path if agent0_type == "ga" else ppo_path)
-    agent1 = None if is_p1_human else load_agent(agent1_type, ga_path if agent1_type == "ga" else ppo_path)
+    agent0 = (
+        None
+        if is_p0_human
+        else load_agent(
+            agent0_type,
+            ga_path if agent0_type == "ga" else ppo_path,
+            custom_bot_config=custom_bot_config,
+            preset_configs=preset_configs,
+        )
+    )
+    agent1 = (
+        None
+        if is_p1_human
+        else load_agent(
+            agent1_type,
+            ga_path if agent1_type == "ga" else ppo_path,
+            custom_bot_config=custom_bot_config,
+            preset_configs=preset_configs,
+        )
+    )
 
     agent0_label = f"Human (P{p0_idx + 1})" if is_p0_human else f"AI ({agent0_type.upper()})"
     agent1_label = f"Human (P{p1_idx + 1})" if is_p1_human else f"AI ({agent1_type.upper()})"
@@ -176,6 +231,9 @@ def run_interactive_match(
         agent1.reset()
 
     running = True
+    paused = False
+    step_once = False
+    speed_idx = 2  # 1.0x default
     wins_0 = 0
     wins_1 = 0
     round_over_timer = 0.0
@@ -185,18 +243,23 @@ def run_interactive_match(
     print("Controls:")
     print("  P1: W/S (drive/brake), A/D (steer), Space (dash), LShift (anchor)")
     print("  P2: Up/Down (drive/brake), Left/Right (steer), Enter (dash), RShift (anchor)")
-    print("  M: Mute/Unmute Audio  |  L: Toggle Lidar  |  ESC: Menu/Quit\n")
+    print("  I: Toggle AI X-Ray  |  L: Toggle Lidar  |  P: Pause  |  .: Step  |  -/+: Speed  |  ESC: Menu\n")
 
+    agents_map = {"agent_0": agent0, "agent_1": agent1}
     env.render(
         round_scores=(wins_0, wins_1),
         rounds_to_win=rounds_to_win,
         agent_names=agent_names,
+        xray_info=extract_xray_info(agents_map),
+        sim_status=f"SPEED:{SPEED_LEVELS[speed_idx]}x",
     )
 
     clock = pygame.time.Clock()
 
     while running:
-        dt = clock.tick(50) / 1000.0
+        speed_mult = SPEED_LEVELS[speed_idx]
+        target_fps = max(12, int(50 * speed_mult))
+        dt = clock.tick(target_fps if not paused else 30) / 1000.0
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -212,6 +275,18 @@ def run_interactive_match(
                 elif event.key == pygame.K_l:
                     if env._renderer is not None:
                         env._renderer.show_lidar_overlay = not env._renderer.show_lidar_overlay
+                elif event.key == pygame.K_i:
+                    if env._renderer is not None:
+                        env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                elif event.key == pygame.K_p:
+                    paused = not paused
+                elif event.key in (pygame.K_PERIOD, pygame.K_n):
+                    paused = True
+                    step_once = True
+                elif event.key in (pygame.K_MINUS, pygame.K_LEFTBRACKET, pygame.K_KP_MINUS):
+                    speed_idx = max(0, speed_idx - 1)
+                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_RIGHTBRACKET, pygame.K_KP_PLUS):
+                    speed_idx = min(len(SPEED_LEVELS) - 1, speed_idx + 1)
                 elif event.key == pygame.K_r:
                     wins_0 = 0
                     wins_1 = 0
@@ -224,6 +299,22 @@ def run_interactive_match(
 
         if not running:
             break
+
+        sim_status = f"PAUSED ({SPEED_LEVELS[speed_idx]}x)" if paused else f"SPEED:{SPEED_LEVELS[speed_idx]}x"
+
+        if paused and not step_once:
+            env.render(
+                round_scores=(wins_0, wins_1),
+                rounds_to_win=rounds_to_win,
+                agent_names=agent_names,
+                subtitle="[PAUSED — Press P to Resume or . to Step 1 Frame]",
+                fps=30,
+                xray_info=extract_xray_info(agents_map),
+                sim_status=sim_status,
+            )
+            continue
+
+        step_once = False
 
         # Between-rounds handling
         if not env.agents:
@@ -238,6 +329,9 @@ def run_interactive_match(
                 rounds_to_win=rounds_to_win,
                 agent_names=agent_names,
                 subtitle=subtitle,
+                fps=target_fps,
+                xray_info=extract_xray_info(agents_map),
+                sim_status=sim_status,
             )
             round_over_timer += dt
 
@@ -274,6 +368,9 @@ def run_interactive_match(
             rounds_to_win=rounds_to_win,
             agent_names=agent_names,
             subtitle=subtitle,
+            fps=target_fps,
+            xray_info=extract_xray_info(agents_map),
+            sim_status=sim_status,
         )
 
     if not return_to_hub:
@@ -285,6 +382,7 @@ def run_interactive_4way_match(
     map_name: str = "Colosseum",
     custom_bot_config: BotConfig | None = None,
     return_to_hub: bool = False,
+    preset_configs: dict[str, BotConfig] | None = None,
 ) -> None:
     """Run interactive 4-Way Battle Royale session."""
     if not pygame.get_init():
@@ -313,22 +411,31 @@ def run_interactive_4way_match(
             agent_instances[k] = None
             agent_labels.append("Human (P2)")
         else:
-            bot = load_agent(atype, custom_bot_config=custom_bot_config)
+            bot = load_agent(atype, custom_bot_config=custom_bot_config, preset_configs=preset_configs)
             bot.reset()
             agent_instances[k] = bot
             agent_labels.append(f"AI ({atype.upper()})")
 
     running = True
+    paused = False
+    step_once = False
+    speed_idx = 2
     clock = pygame.time.Clock()
 
     print("\n--- Kinetic Sumo 4-Way Battle Royale ---")
     print(f"Arena Map: {map_name} | Elimination: Last Disc Standing")
-    print("Controls: P1 (WASD/Space/Shift), P2 (Arrows/Enter/RShift), M (Mute), ESC (Menu)\n")
+    print("Controls: P1 (WASD/Space/Shift), P2 (Arrows/Enter/RShift), I (X-Ray), P (Pause), . (Step), -/+ (Speed), M (Mute), ESC (Menu)\n")
 
-    env.render()
+    env.render(
+        agent_names=tuple(agent_labels),
+        xray_info=extract_xray_info(agent_instances),
+        sim_status=f"SPEED:{SPEED_LEVELS[speed_idx]}x",
+    )
 
     while running:
-        dt = clock.tick(50) / 1000.0
+        speed_mult = SPEED_LEVELS[speed_idx]
+        target_fps = max(12, int(50 * speed_mult))
+        clock.tick(target_fps if not paused else 30)
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -341,6 +448,18 @@ def run_interactive_4way_match(
                 elif event.key == pygame.K_m:
                     if env._renderer is not None:
                         env._renderer.audio.toggle_mute()
+                elif event.key == pygame.K_i:
+                    if env._renderer is not None:
+                        env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                elif event.key == pygame.K_p:
+                    paused = not paused
+                elif event.key in (pygame.K_PERIOD, pygame.K_n):
+                    paused = True
+                    step_once = True
+                elif event.key in (pygame.K_MINUS, pygame.K_LEFTBRACKET, pygame.K_KP_MINUS):
+                    speed_idx = max(0, speed_idx - 1)
+                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS, pygame.K_RIGHTBRACKET, pygame.K_KP_PLUS):
+                    speed_idx = min(len(SPEED_LEVELS) - 1, speed_idx + 1)
                 elif event.key == pygame.K_r:
                     obs, _ = env.reset()
                     for b in agent_instances.values():
@@ -349,6 +468,19 @@ def run_interactive_4way_match(
 
         if not running:
             break
+
+        sim_status = f"PAUSED ({SPEED_LEVELS[speed_idx]}x)" if paused else f"SPEED:{SPEED_LEVELS[speed_idx]}x"
+        if paused and not step_once:
+            env.render(
+                agent_names=tuple(agent_labels),
+                subtitle="[PAUSED — Press P to Resume or . to Step 1 Frame]",
+                fps=30,
+                xray_info=extract_xray_info(agent_instances),
+                sim_status=sim_status,
+            )
+            continue
+
+        step_once = False
 
         # Compute actions
         actions = {}
@@ -363,7 +495,12 @@ def run_interactive_4way_match(
                 actions[k] = inst.act(obs[k])
 
         obs, rewards, terms, truncs, infos = env.step(actions)
-        env.render()
+        env.render(
+            agent_names=tuple(agent_labels),
+            fps=target_fps,
+            xray_info=extract_xray_info(agent_instances),
+            sim_status=sim_status,
+        )
 
         # If round ends (all eliminated or 1 winner), allow pause before restart
         if not env.agents:

@@ -35,9 +35,13 @@ class RookieAgent(BaseAgent):
             init_weights = rng.randn(total_params).astype(np.float32) * 0.20
             self.policy = GAMLP(weights=init_weights)
         self.policy.stochasticity = self.stochasticity
+        self.last_intent: str = "ROOKIE CHASE"
+        self.target_vec: np.ndarray | None = None
 
     def reset(self) -> None:
         self.policy.reset()
+        self.last_intent = "ROOKIE CHASE"
+        self.target_vec = None
 
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
@@ -59,9 +63,12 @@ class RookieAgent(BaseAgent):
             steer = np.clip(self.kp * err - self.kd * omega, -1.0, 1.0)
             thrust = 0.6 if abs(err) < np.pi / 2.0 else 0.1
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
+            self.last_intent = "ROOKIE PANIC"
+            self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
             return np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
 
         # 2. Naive pursuit without lead prediction
+        self.target_vec = np.array([dx, dy], dtype=np.float32)
         target_ang = np.arctan2(dy, dx)
         err = (target_ang - heading + np.pi) % (2.0 * np.pi) - np.pi
         steer = np.clip(self.kp * err - self.kd * omega, -1.0, 1.0)
@@ -69,6 +76,7 @@ class RookieAgent(BaseAgent):
 
         # Inconsistent dash timing
         ability = 1.0 if (dist_opp < 3.5 and abs(err) < 0.25 and np.random.rand() < 0.4 and energy >= 40.0 and cd <= 0.0) else 0.0
+        self.last_intent = "ROOKIE LUNGE" if ability > 0.5 else "ROOKIE CHASE"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
         return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
@@ -102,9 +110,13 @@ class ContenderAgent(BaseAgent):
             self.policy = GAMLP(weights=weights)
 
         self.policy.stochasticity = self.stochasticity
+        self.last_intent: str = "STRIKER TRACK"
+        self.target_vec: np.ndarray | None = None
 
     def reset(self) -> None:
         self.policy.reset()
+        self.last_intent = "STRIKER TRACK"
+        self.target_vec = None
 
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
@@ -128,12 +140,15 @@ class ContenderAgent(BaseAgent):
             steer = np.clip(self.kp * err - self.kd * omega, -1.0, 1.0)
             thrust = 1.0 if abs(err) < np.pi / 2.0 else 0.2
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
+            self.last_intent = "RING GUARD"
+            self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
             return np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
 
         # 2. Lead intercept striker offensive drive
         t_lead = np.clip(dist_opp / 13.0, 0.05, 0.32)
         pred_x = dx + dvx * t_lead
         pred_y = dy + dvy * t_lead
+        self.target_vec = np.array([pred_x, pred_y], dtype=np.float32)
         target_ang = np.arctan2(pred_y, pred_x)
         err = (target_ang - heading + np.pi) % (2.0 * np.pi) - np.pi
         steer = np.clip(self.kp * err - self.kd * omega, -1.0, 1.0)
@@ -141,6 +156,7 @@ class ContenderAgent(BaseAgent):
 
         # Offensive strike dashes
         ability = 1.0 if (dist_opp < 4.8 and abs(err) < 0.22 and energy >= 40.0 and cd <= 0.0) else 0.0
+        self.last_intent = "STRIKER DASH" if ability > 0.5 else "STRIKER LEAD"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
         return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
@@ -175,9 +191,13 @@ class ApexAgent(BaseAgent):
             self.policy = GAMLP(weights=weights)
 
         self.policy.stochasticity = self.stochasticity
+        self.last_intent: str = "APEX INTERCEPT"
+        self.target_vec: np.ndarray | None = None
 
     def reset(self) -> None:
         self.policy.reset()
+        self.last_intent = "APEX INTERCEPT"
+        self.target_vec = None
 
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
@@ -202,12 +222,15 @@ class ApexAgent(BaseAgent):
             thrust = 1.0 if abs(err) < np.pi / 2.0 else 0.1
             ability = 1.0 if (abs(err) < 0.20 and energy >= 40.0 and cd <= 0.0) else 0.0
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
+            self.last_intent = "APEX RECOVERY"
+            self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
             return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
 
         # 2. Precision intercept targeting
         t_lead = np.clip(dist_opp / 14.0, 0.05, 0.35)
         pred_x = dx + dvx * t_lead
         pred_y = dy + dvy * t_lead
+        self.target_vec = np.array([pred_x, pred_y], dtype=np.float32)
         target_ang = np.arctan2(pred_y, pred_x)
         err = (target_ang - heading + np.pi) % (2.0 * np.pi) - np.pi
         steer = np.clip(self.kp * err - self.kd * omega, -1.0, 1.0)
@@ -220,8 +243,12 @@ class ApexAgent(BaseAgent):
         ability = 0.0
         if dist_opp < 5.0 and abs(err) < 0.20 and energy >= 40.0 and cd <= 0.0:
             ability = 1.0
+            self.last_intent = "APEX KILL DASH"
         elif dist_opp < 2.0 and rel_spd > 4.0:
             ability = -1.0  # Defensive anchor brace against high-speed collision
+            self.last_intent = "APEX PARRY"
+        else:
+            self.last_intent = "APEX INTERCEPT"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
         return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)

@@ -37,6 +37,10 @@ class GAMLP(BaseAgent):
         else:
             self.init_weights()
 
+        self.last_hidden: np.ndarray = np.zeros(self.h2, dtype=np.float32)
+        self.last_intent: str = "NEURAL MLP"
+        self.target_vec: np.ndarray | None = None
+
     def init_weights(self) -> None:
         """Xavier / Glorot initialization of flat parameter vector."""
         # Xavier std = sqrt(2 / (fan_in + fan_out))
@@ -93,12 +97,54 @@ class GAMLP(BaseAgent):
         h2 = np.tanh(h1 @ self.w2 + self.b2)
         out = np.tanh(h2 @ self.w3 + self.b3)
 
+        self.last_hidden = h2.copy()
+
         effective_noise = temperature if temperature is not None else self.stochasticity
         if effective_noise > 0.0:
             noise = np.random.normal(0.0, effective_noise, size=out.shape).astype(np.float32)
             out = np.clip(out + noise, -1.0, 1.0)
 
+        # Derive visual intent label & approximate heading target vector for X-Ray HUD
+        if out[2] > 0.5:
+            self.last_intent = "MLP: DASH SURGE"
+        elif out[2] < -0.5:
+            self.last_intent = "MLP: ANCHOR BRACE"
+        elif out[0] > 0.5:
+            self.last_intent = "MLP: FULL DRIVE"
+        elif out[0] < -0.2:
+            self.last_intent = "MLP: REVERSE BRAKE"
+        else:
+            self.last_intent = "MLP: MICRO PIVOT"
+
+        if len(x) >= 9:
+            cos_th, sin_th = float(x[4]), float(x[5])
+            heading = np.arctan2(sin_th, cos_th)
+            aim_ang = heading + float(out[1]) * 0.8
+            mag = max(1.5, abs(float(out[0])) * 4.0)
+            self.target_vec = np.array([np.cos(aim_ang) * mag, np.sin(aim_ang) * mag], dtype=np.float32)
+
         return out.astype(np.float32)
+
+    def get_sensory_importance(self) -> dict[str, float]:
+        """Compute normalized synaptic importance across the 4 sensory observation slices."""
+        row_norms = np.mean(np.abs(self.w1), axis=1)
+        kin = float(np.mean(row_norms[0:7]))
+        opp = float(np.mean(row_norms[7:12]))
+        res = float(np.mean(row_norms[12:14]))
+        lidar = float(np.mean(row_norms[14:46]))
+        total = max(1e-6, kin + opp + res + lidar)
+        return {
+            "Self Kinematics": kin / total,
+            "Opponent Rel": opp / total,
+            "Resources": res / total,
+            "16-Ray Lidar": lidar / total,
+        }
+
+    def get_input_salience(self) -> np.ndarray:
+        """Return normalized 46-element vector of input synaptic magnitudes in [0, 1]."""
+        row_norms = np.mean(np.abs(self.w1), axis=1)
+        max_v = max(1e-6, float(np.max(row_norms)))
+        return (row_norms / max_v).astype(np.float32)
 
     def batch_act(self, obs_batch: np.ndarray) -> np.ndarray:
         """Vectorized forward pass for a batch of observations (N, 46) -> (N, 3)."""

@@ -42,6 +42,9 @@ class PPOPolicy(nn.Module, BaseAgent):
 
         # State-independent learnable log standard deviation
         self.actor_logstd = nn.Parameter(torch.zeros(1, act_dim))
+        self.last_intent: str = "PPO ACTOR-CRITIC"
+        self.last_value: float = 0.0
+        self.target_vec: np.ndarray | None = None
 
     def get_value(self, x: torch.Tensor) -> torch.Tensor:
         """Compute state value."""
@@ -80,13 +83,24 @@ class PPOPolicy(nn.Module, BaseAgent):
         with torch.no_grad():
             x = torch.as_tensor(obs, dtype=torch.float32).unsqueeze(0)
             mean = self.actor_mean(x)
+            val = self.critic(x)
+            self.last_value = float(val.item())
             if deterministic:
                 action = torch.clamp(mean, -1.0, 1.0)
             else:
                 std = torch.exp(self.actor_logstd.expand_as(mean))
                 dist = Normal(mean, std)
                 action = torch.clamp(dist.sample(), -1.0, 1.0)
-            return action.squeeze(0).cpu().numpy().astype(np.float32)
+            out = action.squeeze(0).cpu().numpy().astype(np.float32)
+
+        self.last_intent = f"PPO V(s)={self.last_value:+.2f}"
+        if len(obs) >= 9:
+            cos_th, sin_th = float(obs[4]), float(obs[5])
+            heading = np.arctan2(sin_th, cos_th)
+            aim_ang = heading + float(out[1]) * 0.8
+            mag = max(1.5, abs(float(out[0])) * 4.0)
+            self.target_vec = np.array([np.cos(aim_ang) * mag, np.sin(aim_ang) * mag], dtype=np.float32)
+        return out
 
     def save(self, filepath: str) -> None:
         """Save policy weights to file."""

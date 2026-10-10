@@ -79,6 +79,9 @@ class KineticSumo4WayEnv(ParallelEnv):
         self.winner: str | None = None
         self.is_draw = False
         self.recent_collisions: list[CollisionResult] = []
+        self.last_actions: dict[str, np.ndarray] = {
+            a: np.zeros(3, dtype=np.float32) for a in self.possible_agents
+        }
 
         self._renderer = None
         if self.render_mode == "human":
@@ -106,6 +109,7 @@ class KineticSumo4WayEnv(ParallelEnv):
         self.winner = None
         self.is_draw = False
         self.recent_collisions = []
+        self.last_actions = {a: np.zeros(3, dtype=np.float32) for a in self.possible_agents}
 
         # 4-way spawn transforms
         spawns = self.map_preset.get_4way_spawn_transforms()
@@ -217,7 +221,8 @@ class KineticSumo4WayEnv(ParallelEnv):
         for a_id in list(self.agents):
             if not self.agent_objs[a_id].alive:
                 continue
-            act = actions.get(a_id, np.zeros(3, dtype=np.float32))
+            act = np.asarray(actions.get(a_id, np.zeros(3, dtype=np.float32)), dtype=np.float32)
+            self.last_actions[a_id] = act.copy()
             self.physics.apply_agent_controls(self.agent_objs[a_id], act)
 
 
@@ -286,21 +291,38 @@ class KineticSumo4WayEnv(ParallelEnv):
 
         return observations, rewards, terminations, truncations, infos
 
-    def render(self) -> np.ndarray | None:
+    def render(
+        self,
+        agent_names: tuple[str, str, str, str] | None = None,
+        subtitle: str | None = None,
+        fps: int | None = None,
+        xray_info: dict[str, dict[str, Any]] | None = None,
+        sim_status: str | None = None,
+    ) -> np.ndarray | None:
         """Render frame using SumoRenderer."""
         if self._renderer is None:
             from src.ui.renderer import SumoRenderer
             self._renderer = SumoRenderer(arena_map=self.map_preset, mode=self.render_mode or "human")
 
         current_r = self.physics.compute_arena_radius(self.elapsed_time)
-        return self._renderer.render_4way_frame(
-            agents=self.agent_objs,
-            arena_radius=current_r,
-            elapsed_time=self.elapsed_time,
-            recent_collisions=self.recent_collisions,
-            winner=self.winner,
-            is_draw=self.is_draw,
-        )
+        kwargs: dict[str, Any] = {
+            "agents": self.agent_objs,
+            "arena_radius": current_r,
+            "elapsed_time": self.elapsed_time,
+            "recent_collisions": self.recent_collisions,
+            "winner": self.winner,
+            "is_draw": self.is_draw,
+            "last_actions": self.last_actions,
+            "xray_info": xray_info,
+            "sim_status": sim_status,
+        }
+        if agent_names is not None:
+            kwargs["agent_names"] = agent_names
+        if subtitle is not None:
+            kwargs["subtitle"] = subtitle
+        if fps is not None:
+            kwargs["fps"] = fps
+        return self._renderer.render_4way_frame(**kwargs)
 
     def close(self) -> None:
         if self._renderer is not None:

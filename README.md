@@ -1,149 +1,204 @@
-# Kinetic Sumo (1v1 2D Physics-Driven Hover Arena Duel)
+# Models Arena — Kinetic Sumo
 
-An open-source, modular, CPU-optimized multi-agent reinforcement learning (MARL) framework and competitive robotics simulation. Agents pilot high-inertia hovering discs armed with reinforced bumper shields, competing to knock opponents out of a dynamically shrinking ring.
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![PettingZoo ParallelEnv](https://img.shields.io/badge/PettingZoo-ParallelEnv-00C853)](https://pettingzoo.farama.org/)
+[![PyTorch & NumPy](https://img.shields.io/badge/Engine-NumPy%20%26%20PyTorch-EE4C2C?logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Tests](https://img.shields.io/badge/Tests-80%20Passed-success)](#6-quickstart--installation)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-Built exclusively for low-spec CPU machines with **pure NumPy vectorized physics achieving >100,000 steps/sec per core**, full PettingZoo `ParallelEnv` compliance, and support for competing AI paradigms: **Genetic Algorithm Neuroevolution**, **CleanRL Self-Play PPO**, and a deterministic **PD Heuristic Baseline**.
+An open-source, modular, CPU-optimized **Multi-Agent Reinforcement Learning (MARL)** framework, neuroevolution lab, and competitive 2D physics arena. Agents pilot high-inertia hovering discs armed with reinforced bumper shields, competing to knock opponents out of dynamically shrinking hazard rings.
+
+Built for high throughput on standard CPU hardware with **pure NumPy vectorized physics achieving >100,000 steps/sec per core**, full `PettingZoo ParallelEnv` compliance, progressive ML fighter tiers, live in-app genetic breeding, and tournament analytics.
 
 ---
 
-## 1. System Architecture
+## Arcade Hub & Visual Gallery
+
+| Quick Duel & Fighter Select | Tournament Elo Ladder |
+| :---: | :---: |
+| ![Quick Duel](tab_screenshots/tab_0_quick_duel.png) | ![Tournament Ladder](tab_screenshots/tab_2_tournament.png) |
+
+| Head-to-Head Matchup Matrix | Multi-Line Elo Trajectory |
+| :---: | :---: |
+| ![H2H Confusion Matrix](tab_screenshots/tab_3_analytics_h2h.png) | ![Elo Trajectory Plot](tab_screenshots/tab_3_analytics_elo.png) |
+
+| Interactive Evolution Lab | Arena Map & Hazard Showcase |
+| :---: | :---: |
+| ![Evolution Lab](tab_screenshots/tab_4_evo_lab.png) | ![Map Showcase](tab_screenshots/tab_6_map_showcase.png) |
+
+---
+
+## 1. Key Features
+
+* **Pure NumPy Vectorized 2D Physics Engine**: Deterministic elastic disc collisions, angular momentum damping, directional $120^\circ$ front bumper shields, flank/rear impulse multipliers, and vectorized 16-ray Lidar raycasting.
+* **Progressive ML Hierarchy & Tactical Archetypes**:
+  * **ML Progression**: Climb from `Rookie_Bot` ($\sim 960$ Elo) $\rightarrow$ `Contender_Bot` ($\sim 1250$ Elo) $\rightarrow$ `Apex_Champion` ($\sim 1495$ Elo), alongside `SelfPlay_PPO` and `Neuroevolution_GA`.
+  * **Tactical Bots**: `Bulldozer` (hyper-aggressive rammer), `Shinobi` (evasive flanker), `Guardian` (center-ring anchor), and user-customizable `Tunable` bots.
+* **Interactive Evolution Lab (`EVO LAB`)**: Breed, mutate, and evaluate neural network populations live inside the GUI—step 1 generation at a time, turbo-evolve 10 generations headlessly, inspect live fitness curves, and export champion policies directly into the tournament roster.
+* **Deep Tournament Analytics (`ANALYTICS`)**:
+  * **Head-to-Head Confusion Matrix**: Dynamic $N \times N$ heatmap displaying exact win-loss records and win percentages for every bot pairing.
+  * **Elo Trajectory Timeline**: Multi-line rating progression chart across tournament matches, paired with real physical ring-out KO ratios.
+* **9 Deterministic Hazard Arenas**:
+  * Classic geometric arenas: `Open`, `Sanctuary`, `Pinball`, `Atolls`, `Colosseum`, `Crossfire`.
+  * Dynamic hazard arenas: `Bumper_Coliseum` ($2.0\times$ active pinball rebound bumpers), `Frost_Summit` (low-friction ice drift), and `Sinking_Pillars` (stepped collapsing ring sectors).
+
+---
+
+## 2. System Architecture
 
 ```text
-kinetic-sumo/
+models-arena/
 ├── pyproject.toml
+├── LICENSE
 ├── README.md
+├── checkpoints/            # Pre-trained GA (.npy) & PPO (.pt) model weights
 ├── src/
 │   ├── engine/             # Headless pure NumPy 2D physics & raycasting
-│   │   ├── entities.py     # Disc agent kinematics, mass, moment of inertia, bumper arcs
-│   │   ├── physics.py      # Elastic collisions, drag, boundaries, angular damping
+│   │   ├── entities.py     # Disc kinematics, mass, moment of inertia, bumper arcs
+│   │   ├── physics.py      # Elastic collisions, surface friction, bumpers, ring collapse
 │   │   └── raycast.py      # Vectorized 16-ray Lidar intersection engine
 │   ├── env/                # PettingZoo ParallelEnv & high-speed vector environments
-│   │   ├── arena_env.py    # PettingZoo ParallelEnv wrapper, stepping, resets
+│   │   ├── arena_env.py    # 1v1 PettingZoo ParallelEnv wrapper
+│   │   ├── arena_4way_env.py # 4-Player Battle Royale Free-For-All environment
 │   │   ├── vector_env.py   # Pure NumPy batch simulator (>100k steps/sec)
-│   │   └── rewards.py      # PBRS, kinetic exchange, anti-spin & anti-jitter penalties
-│   ├── maps.py             # Geometric arena presets (Open, Sanctuary, Pinball, Atolls)
-│   ├── agents/             # Policies & model architectures
-│   │   ├── base.py         # Abstract Agent interface
-│   │   ├── heuristic.py    # Rule-based PD steering & intercept state machine bot
+│   │   ├── rewards.py      # PBRS potential, kinetic exchange, anti-exploitation
+│   │   └── maps.py         # Extended hazard map registry
+│   ├── maps.py             # Core deterministic arena presets & obstacle definitions
+│   ├── agents/             # AI policies & neural network architectures
+│   │   ├── base.py         # Abstract BaseAgent interface
+│   │   ├── progressive.py  # Tiered ML policies (Rookie, Contender, Apex)
+│   │   ├── tactical.py     # Bulldozer, Shinobi, Guardian & Tunable archetypes
+│   │   ├── heuristic.py    # Rule-based PD steering & intercept state machine
 │   │   ├── ga_mlp.py       # Flat NumPy MLP (46 -> 32 -> 32 -> 3) for Neuroevolution
-│   │   └── ppo_policy.py   # Actor-Critic MLP policy (CleanRL style)
-│   ├── training/           # Self-play training loops
+│   │   └── ppo_policy.py   # PyTorch Actor-Critic MLP policy (CleanRL style)
+│   ├── training/           # Self-play & evolutionary training loops
 │   │   ├── train_ga.py     # Multiprocessing genetic algorithm & mutation loop
 │   │   ├── train_ppo.py    # Self-play PPO with GAE-lambda rollout buffer
-│   │   └── league.py       # Prioritized Fictitious Self-Play (PFSP) historical league
-│   ├── eval/               # Evaluation & ratings
-│   │   └── tournament.py   # Automated round-robin Elo ladder generator (K=32)
-│   └── ui/                 # Rendering and human play
-│       ├── renderer.py     # Pygame-CE renderer (sparks, thrust trails, lidar overlay)
-│       └── play.py         # Human vs AI / AI vs AI interactive launcher
-└── tests/                  # Pytest suite (30 unit & compliance tests)
+│   │   └── league.py       # Prioritized Fictitious Self-Play (PFSP) matchmaking
+│   ├── eval/               # Evaluation & Elo ratings
+│   │   └── tournament.py   # Round-robin Elo ladder, H2H matrix & KO tracker
+│   └── ui/                 # Arcade Hub GUI, rendering & procedural audio
+│       ├── hub.py          # 7-Tab Interactive Arcade Hub (Duel, 4-Way, Analytics, Evo Lab)
+│       ├── renderer.py     # Pygame-CE arena renderer (sparks, trails, lidar overlay)
+│       ├── audio.py        # Real-time procedural sound synthesizer
+│       └── play.py         # CLI & GUI entry point launcher
+└── tests/                  # Pytest verification suite (80 unit & integration tests)
 ```
 
 ---
 
-## 2. Gameplay & Combat Mechanics
+## 3. Gameplay & Combat Mechanics
 
-### Continuous Action Space: $a = [\text{thrust}, \text{steer}, \text{ability}] \in [-1.0, 1.0]^3$
-- **`thrust` $\in [-1.0, 1.0]$**: Forward throttle ($[0, 1] \times 120\,\text{N}$) or reverse brake ($[-1, 0] \times 60\,\text{N}$).
-- **`steer` $\in [-1.0, 1.0]$**: Rotational torque mapped to angular velocity.
-- **`ability` $\in [-1.0, 1.0]$**:
-  - $> 0.5$ triggers **Dash**: $2\times$ forward speed burst, steering locked for $0.25\,\text{s}$, costs $40\%$ energy.
-  - $< -0.5$ triggers **Anchor**: $4\times$ ground friction, absorbs incoming impacts, zero forward drive.
+### Continuous Action Space
+
+$$
+a = [\text{thrust}, \text{steer}, \text{ability}] \in [-1.0, 1.0]^3
+$$
+
+| Action Channel | Range | Physical Effect |
+| :--- | :---: | :--- |
+| **`thrust`** | `[-1.0, 1.0]` | Forward drive throttle (`[0, 1]` $\times 120\text{ N}$) or reverse braking (`[-1, 0]` $\times 60\text{ N}$). |
+| **`steer`** | `[-1.0, 1.0]` | Rotational torque mapped to angular acceleration. |
+| **`ability` > 0.5** | `(0.5, 1.0]` | **Dash Burst**: $2\times$ forward velocity surge, steering locked for $0.25\text{ s}$, costs $40\%$ energy. |
+| **`ability` < -0.5** | `[-1.0, -0.5)` | **Anchor Brace**: $4\times$ ground traction, absorbs incoming impacts, zero forward drive. |
 
 ### Combat Rules
-- **Front $120^\circ$ Reinforced Bumper**: Standard elastic collision recoil ($e = 0.8$).
-- **Flank / Rear Hit**: Hitting an opponent's flank or rear outside their $120^\circ$ bumper delivers **$2.5\times$ impulse** to the target and **cancels attacker recoil**.
-- **Non-Linear Rotational Damping**: $\tau_{\text{drag}} = -\mu \omega |\omega|$ prevents infinite spinning.
-- **Ring Shrink**: Outer circle shrinks from $10.0\,\text{m}$ to $4.0\,\text{m}$ between $t = 20\,\text{s}$ and $t = 45\,\text{s}$. Ring-out equals instant elimination.
+* **Front $120^\circ$ Reinforced Bumper**: Standard elastic collision recoil ($e = 0.8$).
+* **Flank / Rear Hit**: Striking an opponent outside their front $120^\circ$ bumper arc delivers **$2.5\times$ knockback impulse** to the target and **cancels attacker recoil**.
+* **Non-Linear Rotational Damping**: Rotational drag $\tau = -\mu \omega \lvert\omega\rvert$ prevents infinite spinning exploits.
+* **Dynamic Ring Shrink**: Outer boundary shrinks from $10.0\text{ m}$ to $4.0\text{ m}$ between $t = 20\text{ s}$ and $t = 45\text{ s}$ (or steps down in discrete sectors on `Sinking_Pillars`). Crossing the boundary results in an instant ring-out KO.
 
 ---
 
-## 3. Sensory Pipeline (Observation Shape: 46,)
+## 4. Sensory Pipeline — Observation Space `(46,)`
 
-Every agent receives a compact, Markovian 1D `float32` vector of shape `(46,)`:
-1. **Self Kinematics (7)**: $[x/R_0, y/R_0, v_x/V_{\max}, v_y/V_{\max}, \cos\theta, \sin\theta, \omega/\omega_{\max}]$
-2. **Opponent Relative (5)**: $[\Delta x/(2R_0), \Delta y/(2R_0), \Delta v_x/(2V_{\max}), \Delta v_y/(2V_{\max}), (\theta_{\text{opp}} - \theta)/\pi]$
-3. **Resources (2)**: $[\text{energy}/E_{\max}, \text{cooldown}/CD_{\max}]$
-4. **1D Lidar Array (32)**: 16 radial rays reporting normalized distance $[d_0 \dots d_{15}]$ and hit surface types $[t_0 \dots t_{15}]$:
-   - `-1.0`: Void edge (death boundary)
-   - `0.0`: None (clear space within max range)
-   - `0.5`: Arena obstacle / bumper wall
-   - `1.0`: Opponent disc
+Every agent receives a normalized, Markovian `float32` vector of shape `(46,)`:
 
----
+| Slice | Dim | Category | Normalized Components |
+| :--- | :---: | :--- | :--- |
+| `obs[0:7]` | `7` | **Self Kinematics** | $x/R_0$, $y/R_0$, $v_x/V$, $v_y/V$, $\cos\theta$, $\sin\theta$, $\omega/\omega_{\max}$ |
+| `obs[7:12]` | `5` | **Opponent Relative** | $\Delta x/(2R_0)$, $\Delta y/(2R_0)$, $\Delta v_x/(2V)$, $\Delta v_y/(2V)$, $\Delta\theta/\pi$ |
+| `obs[12:14]` | `2` | **Resources** | $\text{energy}/E_{\max}$, $\text{cooldown}/CD_{\max}$ |
+| `obs[14:46]` | `32` | **16-Ray Lidar Array** | 16 radial rays reporting distance $d_i \in [0, 1]$ and surface type $t_i \in \{-1.0, 0.0, 0.5, 1.0\}$ |
 
-## 4. Reward Architecture & Anti-Exploitation
-
-$$R_t = R_{\text{terminal}} + (\gamma \Phi(s_{t+1}) - \Phi(s_t)) + R_{\text{contact}} - R_{\text{penalties}}$$
-
-- **Terminal ($R_{\text{terminal}}$)**: Win $= +1.0$, Loss $= -1.0$, Timeout Draw $= -1.0$ (eliminates cold-war stalling).
-- **PBRS Potential ($\Phi(s)$)**: $0.4 \times \text{Center\_Safety} + 0.6 \times \text{Closing\_Velocity\_Vector}$.
-- **Contact ($R_{\text{contact}}$)**: $+0.4 \times (J_{\text{opp}} / V_{\max}) - 0.1 \times (J_{\text{self}} / V_{\max}) + 0.3 \times \text{flank\_bonus}$.
-- **Anti-Exploitation Penalties**:
-  - Spin suppression: $-0.05 \times \max(0, |\omega| - 1.0)^2$
-  - Actuator jitter: $-0.01 \times \|\mathbf{a}_t - \mathbf{a}_{t-1}\|^2$
-  - Inactivity penalty: $-0.002$
+**Lidar Surface Encoding** $t_i$:
+* `-1.0`: Void edge (ring-out boundary)
+* `0.0`: Clear space (no hit within max ray range)
+* `0.5`: Arena obstacle / pinball bumper pillar
+* `1.0`: Opponent disc
 
 ---
 
-## 5. Quickstart & Installation
+## 5. Reward Architecture & Anti-Exploitation
+
+$$
+R_t = R_{\text{terminal}} + \bigl(\gamma \Phi(s') - \Phi(s)\bigr) + R_{\text{contact}} - R_{\text{penalties}}
+$$
+
+| Component | Symbol | Formulation & Purpose |
+| :--- | :---: | :--- |
+| **Terminal** | $R_{\text{terminal}}$ | Win $= +1.0$, Loss $= -1.0$, Timeout Draw $= -1.0$ (eliminates passive stalling). |
+| **PBRS Potential** | $\Phi(s)$ | $0.4\,\Phi_{\text{center}}$ $+$ $0.6\,\Phi_{\text{closing}}$ (rewards center control & closing speed). |
+| **Kinetic Contact** | $R_{\text{contact}}$ | $+0.4\,(J_{\text{opp}} / V)$ $-$ $0.1\,(J_{\text{self}} / V)$ $+$ $0.3\,I_{\text{flank}}$ |
+| **Spin Suppression** | $P_{\text{spin}}$ | $-0.05 \cdot \max(0, \lvert\omega\rvert - 1.0)^2$ |
+| **Actuator Jitter** | $P_{\text{jitter}}$ | $-0.01 \cdot \lVert \Delta a \rVert^2$ where $\Delta a =$ $a_t$ $-$ $a_{\text{prev}}$ |
+| **Time Penalty** | $P_{\text{time}}$ | $-0.002$ per simulation step |
+
+---
+
+## 6. Quickstart & Installation
 
 ```bash
-# Clone and install dependencies
+# Clone the repository and install in editable mode
+git clone https://github.com/gebersohl-ds/models-arena.git
+cd models-arena
 pip install -e .
 ```
 
-### Running Tests
-```bash
-python -m pytest -v
-```
-
-### Run Benchmarking & Elo Tournament
-```bash
-# Automated round-robin Elo rating ladder (headless fast mode, K=32)
-python -m src.eval.tournament --matches-per-pair 10 --map Open
-
-# Watch tournament matches live visually in Pygame-CE window!
-python -m src.eval.tournament --matches-per-pair 2 --map Pinball --render --fps 50
-```
-
-### Training Pipelines
+### Interactive Arcade Hub & Gameplay
 
 ```bash
-# 1. Train Neuroevolution GA (Genetic Algorithm)
-python -m src.training.train_ga --pop-size 64 --generations 20 --map Open
-
-# 2. Train Self-Play PPO (Prioritized Fictitious Self-Play)
-python -m src.training.train_ppo --timesteps 50000 --num-envs 16 --map Open
-```
-
-### Interactive Arcade Hub & Human / AI Play (Pygame-CE)
-
-```bash
-# 1. Launch Interactive Arcade Hub (Main Menu, Bot Locker, Map Showcase, Tournament)
+# 1. Launch the 7-Tab Interactive Arcade Hub GUI (Default)
 python -m src.ui.play
 
-# 2. Direct 1v1 Duel (Human vs Bulldozer on Colosseum)
-python -m src.ui.play --agent0 human --agent1 bulldozer --map Colosseum
+# 2. Direct 1v1 Duel (Human vs Apex Champion on Bumper Coliseum)
+python -m src.ui.play --agent0 human --agent1 apex --map Bumper_Coliseum
 
 # 3. 4-Way Battle Royale FFA (Last Disc Standing)
 python -m src.ui.play --4way --map Crossfire
 
-# 4. Watch Full AI Tournament visually from launcher
+# 4. Watch Live Visual AI Tournament
 python -m src.ui.play --tournament --matches-per-pair 2 --map Open
-
-# Arena Maps: Open, Sanctuary, Pinball, Atolls, Colosseum, Crossfire
-# Bot Roster: human, heuristic, bulldozer, shinobi, guardian, tunable, ga, ppo, random
 ```
 
-**Controls**:
-- **Player 1 (Cyan)**: `W`/`S` (Drive/Brake), `A`/`D` (Steer CCW/CW), `Space` (Dash burst), `LShift` (Anchor brace)
-- **Player 2 (Orange)**: `Up`/`Down` (Drive/Brake), `Left`/`Right` (Steer), `Return`/`RCtrl` (Dash), `RShift` (Anchor)
-- **General Hotkeys**:
-  - `M`: Toggle Procedural Audio (Mute/Unmute)
-  - `L`: Toggle 16-ray Lidar debug overlay
-  - `R`: Reset current round / match
-  - `ESC`: Return to Hub Menu / Exit
+### Benchmarking, Training & Testing
+
+```bash
+# Run headless round-robin Elo tournament ladder (K=32)
+python -m src.eval.tournament --matches-per-pair 10 --map Open
+
+# Train Neuroevolution GA (Genetic Algorithm)
+python -m src.training.train_ga --pop-size 64 --generations 20 --map Open
+
+# Train Self-Play PPO (Prioritized Fictitious Self-Play)
+python -m src.training.train_ppo --timesteps 50000 --num-envs 16 --map Open
+
+# Run full automated test suite (80 tests)
+python -m pytest -v
+```
+
+### Controls
+
+| Input | Player 1 (Cyan) | Player 2 (Orange) |
+| :--- | :---: | :---: |
+| **Drive / Brake** | `W` / `S` | `Up` / `Down` |
+| **Steer Left / Right** | `A` / `D` | `Left` / `Right` |
+| **Dash Burst** | `Space` | `Return` / `RCtrl` |
+| **Anchor Brace** | `LShift` | `RShift` |
+
+* **Global Hotkeys**: `TAB` (Cycle Hub Tabs), `M` (Mute/Unmute Audio), `L` (Toggle Lidar Overlay), `R` (Reset Match), `ESC` (Return to Hub / Exit).
+
+---
 
 ## License
 

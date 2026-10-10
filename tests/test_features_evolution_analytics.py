@@ -525,3 +525,16 @@ def test_ultra_long_names_rendering_without_overlap():
     hub._draw_hub_frame()
 
 
+def test_hub_recovers_after_display_quit():
+    """Verify ArcadeHub recovers cleanly when a sub-match or tournament calls pygame.quit()."""
+    hub = ArcadeHub(screen_size=900)
+    # Simulate child match / tournament spectator calling pygame.quit() on close
+    pygame.quit()
+
+    # Hub should automatically re-initialize display surface and fonts without raising pygame.error
+    for tab_idx in range(len(hub.TABS)):
+        hub.current_tab = tab_idx
+        hub._draw_hub_frame()
+    assert pygame.get_init()
+    assert pygame.display.get_init()
+    assert pygame.font.get_init()

@@ -432,9 +432,42 @@ class ArcadeHub:
                     if thumb_rect.collidepoint(event.pos):
                         self.selected_map_idx = i
 
+    def _restore_hub_display(self) -> None:
+        """Restore Pygame display, fonts, and window caption after returning from a child match or spectator view."""
+        if not pygame.get_init():
+            pygame.init()
+        if not pygame.font.get_init():
+            pygame.font.init()
+        if not pygame.display.get_init():
+            pygame.display.init()
+
+        surf = pygame.display.get_surface()
+        try:
+            if surf is not None and surf.get_size() == (self.screen_size, self.screen_size):
+                self.screen = surf
+            else:
+                self.screen = pygame.display.set_mode((self.screen_size, self.screen_size))
+        except pygame.error:
+            self.screen = pygame.display.set_mode((self.screen_size, self.screen_size))
+
+        pygame.display.set_caption("Kinetic Sumo - Arcade Hub & Battle Arena")
+
+        self.font_large = pygame.font.SysFont("Consolas", 26, bold=True)
+        self.font_med = pygame.font.SysFont("Consolas", 17, bold=True)
+        self.font_small = pygame.font.SysFont("Consolas", 13)
+        self.font_tiny = pygame.font.SysFont("Consolas", 11)
+        for s in self.sliders:
+            s.font = self.font_small
+        for s in self.evo_sliders:
+            s.font = self.font_small
+
     def _draw_hub_frame(self) -> None:
         """Render active Hub screen."""
-        self.screen.fill(BG_DARK)
+        try:
+            self.screen.fill(BG_DARK)
+        except pygame.error:
+            self._restore_hub_display()
+            self.screen.fill(BG_DARK)
 
         # Title Header
         title_surf = self.font_large.render("KINETIC SUMO : ARCADE ARENA & LAB", True, CYAN_ACCENT)
@@ -1013,6 +1046,7 @@ class ArcadeHub:
             match_info=f"EVO LAB LIVE DUEL: Gen {self.evo_generation} Champion vs Sparring Partner",
             fps=50,
         )
+        self._restore_hub_display()
 
     def _export_evo_champion(self) -> None:
         """Export champion bot weights and add to Tournament ladder."""
@@ -1237,6 +1271,7 @@ class ArcadeHub:
             rounds_to_win=self.rounds_to_win,
             return_to_hub=True,
         )
+        self._restore_hub_display()
 
     def _launch_4way_match(self) -> None:
         """Launch 4-Way Battle Royale with seamless ESC return to Hub."""
@@ -1250,6 +1285,7 @@ class ArcadeHub:
             custom_bot_config=self.custom_bot_config,
             return_to_hub=True,
         )
+        self._restore_hub_display()
 
     def get_tournament_competitors(self) -> list:
         """Build competitor pool for tournament simulation from current roster."""
@@ -1301,6 +1337,7 @@ class ArcadeHub:
             fps=50,
             quiet=False,
         )
+        self._restore_hub_display()
         if hasattr(ladder, "stats") and ladder.stats:
             self.tournament_stats = ladder.stats
         for entry in ladder:

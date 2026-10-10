@@ -37,8 +37,8 @@ starbridge ask --question "Which physics approach should we take for dash collis
 > **Antigravity Execution Tip**: Call `run_command` with `WaitMsBeforeAsync: 1500` when using `--waiting --wait`. This dispatches the wait into a background task, prints the decision ID immediately, and lets you post a summary of the question in chat and end your turn. The system will automatically wake you up with the user's answer as soon as they tap it.
 
 ### Options Breakdown:
-* `--question <text>`: The main question (keep concise and actionable).
-* `--option <text>`: 2 to 4 selectable choices (omit options for free-text response).
+* `--question <text>` (`-q`): **Required flag** (positional arguments are rejected). Include clear bulleted explanations of each option inside `--question` so the user has full context on their phone.
+* `--option <text>` (`-o`): **2 to 4 selectable choices maximum** (passing >4 options fails with `expected array to have <=4 items`), and each option string must be **<= 100 characters**.
 * `--recommended <text>`: Highlights the recommended option.
 * `--context <text>`: Extra explanation or trade-offs for each option.
 * `--waiting`: Flags the question as actively blocking agent progress (triggers high-priority push).

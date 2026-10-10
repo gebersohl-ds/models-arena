@@ -247,3 +247,106 @@ def test_procedural_sound_engine():
     audio.play_anchor()
     audio.play_ringout()
     audio.play_countdown()
+
+
+def test_neural_brain_snapshot_causal_attribution_and_crossover():
+    """Verify GAMLP/PPOPolicy/Progressive brain snapshots, Top-3 causal attribution, and 2-parent crossover."""
+    from src.agents.ga_mlp import GAMLP, synthesize_tactical_brain_snapshot
+    from src.agents.ppo_policy import PPOPolicy
+    from src.agents.progressive import ApexAgent
+
+    obs = np.random.uniform(-1.0, 1.0, size=(46,)).astype(np.float32)
+
+    # 1. GAMLP Brain Snapshot & Causal Attribution
+    ga_a = GAMLP()
+    ga_b = GAMLP()
+    out_a = ga_a.act(obs)
+    assert out_a.shape == (3,)
+    assert ga_a.last_h1.shape == (32,)
+    assert ga_a.last_h2.shape == (32,)
+
+    snap_ga = ga_a.get_brain_snapshot()
+    assert snap_ga["arch"] == "46->32->32->3"
+    assert len(snap_ga["clusters"]) == 8
+    assert snap_ga["cluster_w1"].shape == (8, 32)
+    assert len(snap_ga["top_drivers"]) == 3
+    for c_name, share, act_name in snap_ga["top_drivers"]:
+        assert isinstance(c_name, str)
+        assert 0.0 <= share <= 1.0
+        assert act_name in ("THR", "STR", "ABL")
+
+    # 2. 2-Parent Synaptic Crossover
+    child = ga_a.crossover(ga_b, crossover_rate=0.5)
+    assert isinstance(child, GAMLP)
+    assert child.get_weights().shape == ga_a.get_weights().shape
+    assert not np.allclose(child.get_weights(), ga_a.get_weights())
+    assert not np.allclose(child.get_weights(), ga_b.get_weights())
+
+    # 3. PPOPolicy Brain Snapshot
+    ppo = PPOPolicy()
+    ppo.act(obs)
+    snap_ppo = ppo.get_brain_snapshot()
+    assert "PPO" in snap_ppo["arch"]
+    assert len(snap_ppo["top_drivers"]) == 3
+
+    # 4. Progressive Agent & Tactical Cortex Fallback
+    apex = ApexAgent()
+    apex.act(obs)
+    snap_apex = apex.get_brain_snapshot()
+    assert len(snap_apex["clusters"]) == 8
+    snap_tac = synthesize_tactical_brain_snapshot(obs, out_a, intent="MATADOR OLE")
+    assert snap_tac["intent"] == "MATADOR OLE"
+    assert len(snap_tac["top_drivers"]) == 3
+
+
+def test_live_match_brain_overlay_and_evo_brain_probe():
+    """Verify [B] Brain View overlay in renderer and Interactive Brain Probe + Gauntlet Curriculum in Evo Lab."""
+    env = KineticSumoEnv(map_name="Open", render_mode="rgb_array")
+    obs, _ = env.reset(seed=7)
+    b0 = GAMLP()
+    b1 = MatadorAgent()
+    a0 = b0.act(obs["agent_0"])
+    a1 = b1.act(obs["agent_1"])
+    env.step({"agent_0": a0, "agent_1": a1})
+
+    xray = extract_xray_info({"agent_0": b0, "agent_1": b1}, obs, {"agent_0": a0, "agent_1": a1})
+    assert "brain" in xray["agent_0"]
+    assert "brain" in xray["agent_1"]
+
+    # Enable show_brain_overlay on renderer
+    frame_init = env.render(xray_info=xray)
+    assert env._renderer is not None
+    env._renderer.show_brain_overlay = True
+    frame_brain = env.render(xray_info=xray, sim_status="SPEED:1.0x")
+    assert isinstance(frame_brain, np.ndarray)
+    assert frame_brain.shape == (900, 900, 3)
+    env.close()
+
+    # Verify Evo Lab Brain Topology & Scenario Probe subview and Gauntlet Curriculum
+    hub = ArcadeHub(screen_size=900)
+    hub.current_tab = 4
+    assert "Gauntlet_Curriculum" in hub.evo_sparring_choices
+
+    # Click BRAIN TOPOLOGY & PROBE toggle button
+    click_brain_view = pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 1, "pos": (680, 175)})
+    hub._handle_tab_events(click_brain_view)
+    assert hub.evo_subview == 1
+    hub._draw_hub_frame()
+
+    # Click each of the 4 Scenario Probe buttons
+    probe_xs = [450, 560, 670, 780]
+    for expected_idx, px in enumerate(probe_xs):
+        click_probe = pygame.event.Event(pygame.MOUSEBUTTONDOWN, {"button": 1, "pos": (px, 208)})
+        hub._handle_tab_events(click_probe)
+        assert hub.evo_probe_idx == expected_idx
+        hub._draw_hub_frame()
+
+    # Run 1 generation against Gauntlet_Curriculum using 2-parent crossover
+    hub.evo_sparring_idx = hub.evo_sparring_choices.index("Gauntlet_Curriculum")
+    hub.evo_pop_size = 6
+    hub.evo_population = hub.evo_population[:6]
+    gen_before = hub.evo_generation
+    hub._evo_step_generation(turbo_count=1)
+    assert hub.evo_generation == gen_before + 1
+    assert "Crossover+Mut" in hub.evo_status_text
+

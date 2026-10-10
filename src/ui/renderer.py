@@ -44,6 +44,7 @@ class SumoRenderer:
         self.fps = fps
         self.show_lidar_overlay = True
         self.show_xray_overlay = True
+        self.show_brain_overlay = False
 
         # Scale: arena radius (10m) maps to ~400 pixels
         self.scale = (self.screen_size / 2.0 - 40.0) / self.arena_map.initial_radius
@@ -203,6 +204,153 @@ class SumoRenderer:
             r_txt = f"REW:{rb.get('total', 0.0):+.2f} P:{rb.get('pbrs', 0.0):+.2f} C:{rb.get('contact', 0.0):+.2f}"
             r_surf = self.tiny_font.render(r_txt, True, (165, 185, 215))
             self.screen.blit(r_surf, (x + 6, y + 57))
+
+    def _draw_brain_topology_panel(
+        self,
+        agent_id: str,
+        x: int,
+        y: int,
+        color: tuple[int, int, int],
+        last_actions: dict[str, np.ndarray] | None = None,
+        xray_info: dict[str, dict] | None = None,
+    ) -> None:
+        """Render live 4-column neural network topology graph, active synapses, and WHY causal attribution."""
+        if not self.show_brain_overlay:
+            return
+
+        info = (xray_info or {}).get(agent_id, {})
+        brain = info.get("brain")
+        act = (last_actions or {}).get(agent_id, np.zeros(3, dtype=np.float32))
+        if brain is None:
+            from src.agents.ga_mlp import synthesize_tactical_brain_snapshot
+            brain = synthesize_tactical_brain_snapshot(None, act, intent=info.get("intent", "NEURAL"))
+
+        panel_w = 224
+        panel_h = 248
+        panel_rect = pygame.Rect(x, y, panel_w, panel_h)
+        pygame.draw.rect(self.screen, (14, 18, 28), panel_rect, border_radius=6)
+        pygame.draw.rect(self.screen, color, panel_rect, 1, border_radius=6)
+
+        arch_str = str(brain.get("arch", "46->32->32->3"))
+        hdr_surf = self.tiny_font.render(f"BRAIN [{arch_str}]", True, color)
+        self.screen.blit(hdr_surf, (x + 6, y + 4))
+
+        clusters: list[tuple[str, float]] = brain.get("clusters", [])
+        h1_full = np.asarray(brain.get("h1", np.zeros(12)), dtype=np.float32)
+        h2_full = np.asarray(brain.get("h2", np.zeros(12)), dtype=np.float32)
+        out_vec = np.asarray(brain.get("out", act), dtype=np.float32)
+
+        # Subsample up to 12 hidden nodes per layer for crisp real-time topology visualization
+        n_h = min(12, len(h1_full), len(h2_full))
+        h1_idx = np.linspace(0, len(h1_full) - 1, n_h, dtype=int) if n_h > 0 else np.array([], dtype=int)
+        h2_idx = np.linspace(0, len(h2_full) - 1, n_h, dtype=int) if n_h > 0 else np.array([], dtype=int)
+        h1_nodes = h1_full[h1_idx] if n_h > 0 else np.zeros(12, dtype=np.float32)
+        h2_nodes = h2_full[h2_idx] if n_h > 0 else np.zeros(12, dtype=np.float32)
+
+        cw1 = np.asarray(brain.get("cluster_w1", np.zeros((8, 12))), dtype=np.float32)
+        w2 = np.asarray(brain.get("w2", np.zeros((12, 12))), dtype=np.float32)
+        w3 = np.asarray(brain.get("w3", np.zeros((12, 3))), dtype=np.float32)
+
+        # Node screen coordinates across 4 columns
+        col_x = [x + 66, x + 114, x + 158, x + 198]
+        graph_top = y + 23
+        graph_bot = y + 178
+
+        in_pos = [
+            (col_x[0], int(graph_top + i * (graph_bot - graph_top) / max(1, len(clusters) - 1)))
+            for i in range(len(clusters))
+        ]
+        h1_pos = [
+            (col_x[1], int(graph_top + i * (graph_bot - graph_top) / max(1, len(h1_nodes) - 1)))
+            for i in range(len(h1_nodes))
+        ]
+        h2_pos = [
+            (col_x[2], int(graph_top + i * (graph_bot - graph_top) / max(1, len(h2_nodes) - 1)))
+            for i in range(len(h2_nodes))
+        ]
+        out_pos = [
+            (col_x[3], int(graph_top + 28 + i * 48))
+            for i in range(3)
+        ]
+
+        # 1. Draw active synaptic pathways (In->H1, H1->H2, H2->Out)
+        for i, (_, c_val) in enumerate(clusters):
+            if i >= cw1.shape[0]:
+                continue
+            for j_pos_idx, j_raw in enumerate(h1_idx):
+                if j_raw >= cw1.shape[1]:
+                    continue
+                flow = float(c_val * cw1[i, j_raw])
+                if abs(flow) > 0.08:
+                    s_col = (0, 210, 255) if flow > 0 else (255, 105, 45)
+                    pygame.draw.line(self.screen, s_col, in_pos[i], h1_pos[j_pos_idx], 2 if abs(flow) > 0.28 else 1)
+
+        for j_pos_idx, j_raw in enumerate(h1_idx):
+            if j_raw >= w2.shape[0]:
+                continue
+            h1_v = float(h1_nodes[j_pos_idx])
+            for k_pos_idx, k_raw in enumerate(h2_idx):
+                if k_raw >= w2.shape[1]:
+                    continue
+                flow = float(h1_v * w2[j_raw, k_raw])
+                if abs(flow) > 0.12:
+                    s_col = (0, 195, 245) if flow > 0 else (245, 95, 45)
+                    pygame.draw.line(self.screen, s_col, h1_pos[j_pos_idx], h2_pos[k_pos_idx], 1)
+
+        for k_pos_idx, k_raw in enumerate(h2_idx):
+            if k_raw >= w3.shape[0]:
+                continue
+            h2_v = float(h2_nodes[k_pos_idx])
+            for m in range(min(3, w3.shape[1])):
+                flow = float(h2_v * w3[k_raw, m])
+                if abs(flow) > 0.08:
+                    s_col = (60, 245, 160) if flow > 0 else (255, 105, 55)
+                    pygame.draw.line(self.screen, s_col, h2_pos[k_pos_idx], out_pos[m], 2 if abs(flow) > 0.25 else 1)
+
+        # 2. Draw Sensory Cluster labels & nodes
+        short_names = ["Pos", "Vel", "Aim", "Dist", "Close", "Res", "Front", "Void"]
+        for i, (c_name, c_val) in enumerate(clusters):
+            px, py = in_pos[i]
+            v = float(np.clip(c_val, -1.0, 1.0))
+            n_col = (0, int(110 + 145 * abs(v)), 255) if v >= 0 else (255, int(80 + 120 * abs(v)), 50)
+            pygame.draw.circle(self.screen, n_col, (px, py), 4)
+            lbl = short_names[i] if i < len(short_names) else c_name[:5]
+            l_surf = self.tiny_font.render(lbl, True, (165, 180, 205))
+            self.screen.blit(l_surf, (x + 5, py - 6))
+
+        # 3. Draw H1 & H2 hidden neuron nodes
+        for (px, py), val in zip(h1_pos, h1_nodes):
+            v = float(np.clip(val, -1.0, 1.0))
+            n_col = (0, int(90 + 160 * abs(v)), 235) if v >= 0 else (235, int(75 + 110 * abs(v)), 55)
+            pygame.draw.circle(self.screen, n_col, (px, py), 3)
+
+        for (px, py), val in zip(h2_pos, h2_nodes):
+            v = float(np.clip(val, -1.0, 1.0))
+            n_col = (40, int(100 + 150 * abs(v)), 220) if v >= 0 else (240, int(80 + 110 * abs(v)), 60)
+            pygame.draw.circle(self.screen, n_col, (px, py), 3)
+
+        # 4. Draw Output Actuator nodes (THR, STR, ABL)
+        out_labels = ["THR", "STR", "ABL"]
+        for m in range(3):
+            px, py = out_pos[m]
+            v = float(np.clip(out_vec[m] if m < len(out_vec) else 0.0, -1.0, 1.0))
+            n_col = (50, 235, 135) if v >= 0.1 else ((255, 95, 95) if v <= -0.1 else (90, 100, 125))
+            pygame.draw.circle(self.screen, n_col, (px, py), 5)
+            pygame.draw.circle(self.screen, (230, 240, 255), (px, py), 5, 1)
+            o_surf = self.tiny_font.render(out_labels[m], True, (215, 225, 245))
+            self.screen.blit(o_surf, (px - 22, py - 14))
+
+        # 5. Causal Attribution Footer ("WHY:")
+        why_rect = pygame.Rect(x + 5, y + 188, panel_w - 10, 54)
+        pygame.draw.rect(self.screen, (20, 26, 40), why_rect, border_radius=4)
+        drivers = brain.get("top_drivers", [])
+        why_hdr = self.tiny_font.render("CAUSAL DRIVERS (WHY):", True, (255, 215, 80))
+        self.screen.blit(why_hdr, (x + 9, y + 191))
+        for d_idx, (d_name, d_share, d_act) in enumerate(drivers[:2]):
+            d_txt = f"#{d_idx + 1} {d_name}: {d_share * 100:2.0f}% -> {d_act}"
+            d_surf = self.tiny_font.render(d_txt, True, (195, 215, 240))
+            self.screen.blit(d_surf, (x + 9, y + 206 + d_idx * 15))
+
 
     def render_frame(
         self,
@@ -503,6 +651,8 @@ class SumoRenderer:
             name0 = agent_names[0] if len(agent_names) > 0 else "AGENT 0"
             self._draw_agent_bars(ag0, 30, 20, f"{name0} (Cyan)", (0, 210, 255))
             self._draw_agent_xray_panel("agent_0", 30, 88, (0, 210, 255), last_actions, reward_breakdowns, xray_info)
+            brain_y0 = 168 if self.show_xray_overlay else 88
+            self._draw_brain_topology_panel("agent_0", 20, brain_y0, (0, 210, 255), last_actions, xray_info)
 
         # Agent 1 Bar (Right)
         ag1 = agents.get("agent_1")
@@ -510,12 +660,15 @@ class SumoRenderer:
             name1 = agent_names[1] if len(agent_names) > 1 else "AGENT 1"
             self._draw_agent_bars(ag1, self.screen_size - 240, 20, f"{name1} (Orange)", (255, 87, 34))
             self._draw_agent_xray_panel("agent_1", self.screen_size - 240, 88, (255, 87, 34), last_actions, reward_breakdowns, xray_info)
+            brain_y1 = 168 if self.show_xray_overlay else 88
+            self._draw_brain_topology_panel("agent_1", self.screen_size - 244, brain_y1, (255, 87, 34), last_actions, xray_info)
 
         # Bottom Controls & Simulation Status Strip
         lidar_state = "ON" if self.show_lidar_overlay else "OFF"
         xray_state = "ON" if self.show_xray_overlay else "OFF"
+        brain_state = "ON" if self.show_brain_overlay else "OFF"
         status_suffix = f"  |  {sim_status}" if sim_status else ""
-        ctrl_str = f"[L] Lidar:{lidar_state}  [I] AI X-Ray:{xray_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
+        ctrl_str = f"[L] Lidar:{lidar_state}  [I] X-Ray:{xray_state}  [B] Brain:{brain_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
         ctrl_col = (255, 215, 70) if sim_status and ("PAUSED" in sim_status or "x" in sim_status and "1.0x" not in sim_status) else (130, 145, 175)
         ctrl_surf = self.tiny_font.render(ctrl_str, True, ctrl_col)
         self.screen.blit(ctrl_surf, (self.screen_size // 2 - ctrl_surf.get_width() // 2, self.screen_size - 22))
@@ -774,10 +927,15 @@ class SumoRenderer:
                 self._draw_agent_bars(agents[ak], cx, cy, lbl, colors_4way[ak])
                 if self.show_xray_overlay and idx < 2:
                     self._draw_agent_xray_panel(ak, cx, cy + 68, colors_4way[ak], last_actions, None, xray_info)
+                if self.show_brain_overlay and idx < 2:
+                    by_4w = cy + 148 if self.show_xray_overlay else cy + 68
+                    bx_4w = 20 if idx == 0 else self.screen_size - 244
+                    self._draw_brain_topology_panel(ak, bx_4w, by_4w, colors_4way[ak], last_actions, xray_info)
 
         xray_state = "ON" if self.show_xray_overlay else "OFF"
+        brain_state = "ON" if self.show_brain_overlay else "OFF"
         status_suffix = f"  |  {sim_status}" if sim_status else ""
-        ctrl_str = f"[I] AI X-Ray:{xray_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
+        ctrl_str = f"[I] X-Ray:{xray_state}  [B] Brain:{brain_state}  [P] Pause  [.] Step  [-/+] Speed{status_suffix}"
         ctrl_surf = self.tiny_font.render(ctrl_str, True, (140, 155, 185))
         self.screen.blit(ctrl_surf, (self.screen_size // 2 - ctrl_surf.get_width() // 2, self.screen_size - 20))
 

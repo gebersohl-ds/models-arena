@@ -37,14 +37,23 @@ class RookieAgent(BaseAgent):
         self.policy.stochasticity = self.stochasticity
         self.last_intent: str = "ROOKIE CHASE"
         self.target_vec: np.ndarray | None = None
+        self.last_obs: np.ndarray = np.zeros(46, dtype=np.float32)
+        self.last_out: np.ndarray = np.zeros(3, dtype=np.float32)
 
     def reset(self) -> None:
         self.policy.reset()
         self.last_intent = "ROOKIE CHASE"
         self.target_vec = None
 
+    def get_brain_snapshot(self, obs: np.ndarray | None = None) -> dict:
+        snap = self.policy.get_brain_snapshot(obs if obs is not None else self.last_obs)
+        snap["out"] = self.last_out.copy()
+        snap["intent"] = self.last_intent
+        return snap
+
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
+        self.last_obs = obs.copy()
         pos_x = obs[0] * 10.0
         pos_y = obs[1] * 10.0
         heading = np.arctan2(obs[5], obs[4])
@@ -65,7 +74,9 @@ class RookieAgent(BaseAgent):
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
             self.last_intent = "ROOKIE PANIC"
             self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
-            return np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
+            out = np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
+            self.last_out = out.copy()
+            return out
 
         # 2. Naive pursuit without lead prediction
         self.target_vec = np.array([dx, dy], dtype=np.float32)
@@ -79,7 +90,9 @@ class RookieAgent(BaseAgent):
         self.last_intent = "ROOKIE LUNGE" if ability > 0.5 else "ROOKIE CHASE"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
-        return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        out = np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        self.last_out = out.copy()
+        return out
 
 
 class ContenderAgent(BaseAgent):
@@ -112,14 +125,23 @@ class ContenderAgent(BaseAgent):
         self.policy.stochasticity = self.stochasticity
         self.last_intent: str = "STRIKER TRACK"
         self.target_vec: np.ndarray | None = None
+        self.last_obs: np.ndarray = np.zeros(46, dtype=np.float32)
+        self.last_out: np.ndarray = np.zeros(3, dtype=np.float32)
 
     def reset(self) -> None:
         self.policy.reset()
         self.last_intent = "STRIKER TRACK"
         self.target_vec = None
 
+    def get_brain_snapshot(self, obs: np.ndarray | None = None) -> dict:
+        snap = self.policy.get_brain_snapshot(obs if obs is not None else self.last_obs)
+        snap["out"] = self.last_out.copy()
+        snap["intent"] = self.last_intent
+        return snap
+
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
+        self.last_obs = obs.copy()
         pos_x = obs[0] * 10.0
         pos_y = obs[1] * 10.0
         heading = np.arctan2(obs[5], obs[4])
@@ -142,7 +164,9 @@ class ContenderAgent(BaseAgent):
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
             self.last_intent = "RING GUARD"
             self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
-            return np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
+            out = np.clip(np.array([thrust, steer, 0.0], dtype=np.float32) + noise, -1.0, 1.0)
+            self.last_out = out.copy()
+            return out
 
         # 2. Lead intercept striker offensive drive
         t_lead = np.clip(dist_opp / 13.0, 0.05, 0.32)
@@ -159,7 +183,9 @@ class ContenderAgent(BaseAgent):
         self.last_intent = "STRIKER DASH" if ability > 0.5 else "STRIKER LEAD"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
-        return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        out = np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        self.last_out = out.copy()
+        return out
 
 
 class ApexAgent(BaseAgent):
@@ -193,14 +219,23 @@ class ApexAgent(BaseAgent):
         self.policy.stochasticity = self.stochasticity
         self.last_intent: str = "APEX INTERCEPT"
         self.target_vec: np.ndarray | None = None
+        self.last_obs: np.ndarray = np.zeros(46, dtype=np.float32)
+        self.last_out: np.ndarray = np.zeros(3, dtype=np.float32)
 
     def reset(self) -> None:
         self.policy.reset()
         self.last_intent = "APEX INTERCEPT"
         self.target_vec = None
 
+    def get_brain_snapshot(self, obs: np.ndarray | None = None) -> dict:
+        snap = self.policy.get_brain_snapshot(obs if obs is not None else self.last_obs)
+        snap["out"] = self.last_out.copy()
+        snap["intent"] = self.last_intent
+        return snap
+
     def act(self, obs: np.ndarray) -> np.ndarray:
         obs = np.asarray(obs, dtype=np.float32)
+        self.last_obs = obs.copy()
         pos_x = obs[0] * 10.0
         pos_y = obs[1] * 10.0
         heading = np.arctan2(obs[5], obs[4])
@@ -224,7 +259,9 @@ class ApexAgent(BaseAgent):
             noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
             self.last_intent = "APEX RECOVERY"
             self.target_vec = np.array([-pos_x, -pos_y], dtype=np.float32)
-            return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+            out = np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+            self.last_out = out.copy()
+            return out
 
         # 2. Precision intercept targeting
         t_lead = np.clip(dist_opp / 14.0, 0.05, 0.35)
@@ -251,7 +288,9 @@ class ApexAgent(BaseAgent):
             self.last_intent = "APEX INTERCEPT"
 
         noise = np.random.normal(0.0, self.stochasticity, size=(3,)).astype(np.float32)
-        return np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        out = np.clip(np.array([thrust, steer, ability], dtype=np.float32) + noise, -1.0, 1.0)
+        self.last_out = out.copy()
+        return out
 
 
 def ensure_progressive_checkpoints(checkpoint_dir: str = "checkpoints/ga") -> None:

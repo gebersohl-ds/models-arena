@@ -140,16 +140,21 @@ def play_single_round(
     interrupted = False
 
     def _build_xray() -> dict[str, dict]:
-        return {
-            "agent_0": {
-                "intent": getattr(agent_0, "last_intent", agent_0.__class__.__name__.replace("Agent", "").upper()),
-                "target_vec": getattr(agent_0, "target_vec", None),
-            },
-            "agent_1": {
-                "intent": getattr(agent_1, "last_intent", agent_1.__class__.__name__.replace("Agent", "").upper()),
-                "target_vec": getattr(agent_1, "target_vec", None),
-            },
-        }
+        from src.agents.ga_mlp import synthesize_tactical_brain_snapshot
+        last_acts = getattr(env, "_last_actions", {}) if env is not None else {}
+        res = {}
+        for ak, bot in (("agent_0", agent_0), ("agent_1", agent_1)):
+            intent = getattr(bot, "last_intent", bot.__class__.__name__.replace("Agent", "").upper())
+            if hasattr(bot, "get_brain_snapshot"):
+                b_snap = bot.get_brain_snapshot()
+            else:
+                b_snap = synthesize_tactical_brain_snapshot(obs.get(ak), last_acts.get(ak), intent=intent)
+            res[ak] = {
+                "intent": intent,
+                "target_vec": getattr(bot, "target_vec", None),
+                "brain": b_snap,
+            }
+        return res
 
     while True:
         if render:
@@ -172,6 +177,9 @@ def play_single_round(
                     elif event.key == pygame.K_i:
                         if env._renderer is not None:
                             env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                    elif event.key == pygame.K_b:
+                        if env._renderer is not None:
+                            env._renderer.show_brain_overlay = not env._renderer.show_brain_overlay
                     elif event.key in (pygame.K_f, pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS, pygame.K_RIGHTBRACKET):
                         fps = min(200, fps + 25)
                     elif event.key in (pygame.K_DOWN, pygame.K_MINUS, pygame.K_LEFTBRACKET):
@@ -237,6 +245,8 @@ def play_single_round(
                                 env._renderer.show_lidar_overlay = not env._renderer.show_lidar_overlay
                             elif event.key == pygame.K_i and env._renderer is not None:
                                 env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                            elif event.key == pygame.K_b and env._renderer is not None:
+                                env._renderer.show_brain_overlay = not env._renderer.show_brain_overlay
                             elif event.key in (pygame.K_f, pygame.K_UP, pygame.K_EQUALS, pygame.K_PLUS):
                                 fps = min(200, fps + 25)
                             elif event.key in (pygame.K_DOWN, pygame.K_MINUS):

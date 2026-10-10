@@ -64,6 +64,8 @@ def get_bot_category_badge(name: str) -> tuple[str, tuple[int, int, int]]:
         return "CUSTOM", GOLD_ACCENT
     if any(k in low for k in ("apex", "contender", "rookie", "ppo", "ga", "evo")):
         return "NEURAL ML", GREEN_ACCENT
+    if "gauntlet" in low or "curriculum" in low:
+        return "CURRIC", GOLD_ACCENT
     if "random" in low:
         return "BASELINE", TEXT_MUTED
     return "SELECT", CYAN_ACCENT
@@ -431,6 +433,7 @@ class ArcadeHub:
         self.evo_win_coeff = 1.00
         self.evo_sparring_choices = [
             "Heuristic",
+            "Gauntlet_Curriculum",
             "Bulldozer",
             "Shinobi",
             "Guardian",
@@ -442,9 +445,12 @@ class ArcadeHub:
         ]
         self.evo_sparring_idx = 0
         self.active_evo_slider_idx = 0
+        self.evo_subview = 0  # 0 = Fitness & Heatmap, 1 = Live Brain Topology & Scenario Probe
+        self.evo_probe_idx = 0  # 0 = Foe Charging, 1 = Near Void, 2 = Flank Shot, 3 = Bumper Wall
 
         self.evo_population = [GAMLP(stochasticity=0.04) for _ in range(self.evo_pop_size)]
         self.evo_best_agent = self.evo_population[0].clone()
+        self.evo_best_agent.act(self._build_evo_probe_obs(self.evo_probe_idx)[2], temperature=0.0)
         self.evo_history_best = [3.4]
         self.evo_history_mean = [-4.8]
         self.evo_status_text = "Gen 1 ready: adjust sliders or reward shaping and breed live!"
@@ -724,6 +730,27 @@ class ArcadeHub:
                     self._watch_evo_duel()
                 elif pygame.Rect(65, 658, 290, 32).collidepoint(event.pos):
                     self._export_evo_champion()
+                elif pygame.Rect(405, 163, 210, 26).collidepoint(event.pos):
+                    self.evo_subview = 0
+                elif pygame.Rect(625, 163, 210, 26).collidepoint(event.pos):
+                    self.evo_subview = 1
+                    _, p_desc, p_obs = self._build_evo_probe_obs(self.evo_probe_idx)
+                    self.evo_best_agent.act(p_obs, temperature=0.0)
+                    self.evo_status_text = f"Brain Probe: {p_desc}"
+                elif self.evo_subview == 1:
+                    probe_rects = [
+                        pygame.Rect(405, 196, 103, 25),
+                        pygame.Rect(513, 196, 103, 25),
+                        pygame.Rect(621, 196, 103, 25),
+                        pygame.Rect(729, 196, 106, 25),
+                    ]
+                    for p_i, p_rect in enumerate(probe_rects):
+                        if p_rect.collidepoint(event.pos):
+                            self.evo_probe_idx = p_i
+                            _, p_desc, p_obs = self._build_evo_probe_obs(p_i)
+                            self.evo_best_agent.act(p_obs, temperature=0.0)
+                            self.evo_status_text = f"Probed Champion on '{p_desc}'"
+                            break
 
         elif self.current_tab == 5:
             for idx, s in enumerate(self.sliders):
@@ -1318,15 +1345,33 @@ class ArcadeHub:
             st = self.font_tiny.render(s_line, True, TEXT_MUTED)
             self.screen.blit(st, (65, 698 + s_idx * 16))
 
-        # Right Column: Fitness Curves & Champion Genome Sensory/Weight Heatmap
+        # Right Column: Subview Toggle (Fitness & Heatmap vs Live Brain Topology & Scenario Probe)
         right_box = pygame.Rect(390, 155, 460, 600)
         pygame.draw.rect(self.screen, PANEL_BG, right_box, border_radius=8)
         pygame.draw.rect(self.screen, PANEL_BORDER, right_box, 1, border_radius=8)
 
-        c_title = self.font_med.render(f"GENERATION FITNESS CURVES (GEN {self.evo_generation})", True, GREEN_ACCENT)
-        self.screen.blit(c_title, (410, 168))
+        btn_fit_view = UIButton(
+            pygame.Rect(405, 163, 210, 26),
+            f"FITNESS & GENOME (G{self.evo_generation})",
+            self.font_tiny,
+            GREEN_ACCENT if self.evo_subview == 0 else TEXT_MUTED,
+            bg=(28, 38, 54) if self.evo_subview == 0 else PANEL_BG,
+        )
+        btn_brain_view = UIButton(
+            pygame.Rect(625, 163, 210, 26),
+            "BRAIN TOPOLOGY & PROBE",
+            self.font_tiny,
+            CYAN_ACCENT if self.evo_subview == 1 else TEXT_MUTED,
+            bg=(28, 38, 54) if self.evo_subview == 1 else PANEL_BG,
+        )
+        btn_fit_view.draw(self.screen)
+        btn_brain_view.draw(self.screen)
 
-        # Curve plot area
+        if self.evo_subview == 1:
+            self._draw_evo_brain_probe_view()
+            return
+
+        # Curve plot area (evo_subview == 0)
         plot_rect = pygame.Rect(410, 195, 420, 195)
         pygame.draw.rect(self.screen, (16, 20, 28), plot_rect, border_radius=6)
         pygame.draw.rect(self.screen, PANEL_BORDER, plot_rect, 1, border_radius=6)
@@ -1380,6 +1425,224 @@ class ArcadeHub:
 
         # Champion Genome & Sensory Heatmap Inspector Card (y=420..735)
         self._draw_evo_genome_heatmap_card(pygame.Rect(410, 420, 420, 318))
+
+    def _build_evo_probe_obs(self, probe_idx: int) -> tuple[str, str, np.ndarray]:
+        """Construct a deterministic 46-dim tactical scenario observation for Brain Probing."""
+        obs = np.zeros(46, dtype=np.float32)
+        obs[4] = 1.0  # cos(heading) = 1.0 (facing +X)
+        obs[12] = 1.0  # full energy (100%)
+        obs[13] = 0.0  # dash ready (0s cooldown)
+        obs[14:30] = 0.75  # default medium lidar distance
+        obs[30:46] = -1.0  # default void edge lidar type
+
+        if probe_idx == 0:
+            # FOE CHARGING: opponent close ahead (dx=+2.6m), charging fast at us (dvx=-12m/s)
+            obs[0], obs[1] = -0.15, 0.0
+            obs[2], obs[3] = 0.25, 0.0
+            obs[7], obs[8] = 0.13, 0.02  # close ahead
+            obs[9], obs[10] = -0.45, 0.0  # closing fast
+            obs[14], obs[15], obs[29] = 0.12, 0.16, 0.16  # front lidar close
+            obs[30], obs[31], obs[45] = 1.0, 1.0, 1.0  # opponent detected on front rays
+            return "FOE CHARGE", "Foe charging head-on (d=2.6m, v=-13m/s)", obs
+        elif probe_idx == 1:
+            # NEAR VOID EDGE: agent at r=8.8m near right boundary, moving outward
+            obs[0], obs[1] = 0.88, 0.12
+            obs[2], obs[3] = 0.45, 0.10
+            obs[6] = 0.30
+            obs[7], obs[8] = -0.35, -0.10
+            obs[14], obs[15], obs[29] = 0.06, 0.08, 0.08  # cliff edge right in front!
+            obs[30:46] = -1.0  # void cliff all around front
+            return "NEAR VOID", "Dangerously near void cliff (r=8.9m, outward vel)", obs
+        elif probe_idx == 2:
+            # FLANK SHOT: opponent exposed at 35-deg flank angle, dash ready
+            obs[0], obs[1] = 0.10, -0.10
+            obs[2], obs[3] = 0.35, 0.20
+            obs[7], obs[8] = 0.16, 0.11  # foe at ~35 deg front-left
+            obs[9], obs[10] = -0.15, -0.10
+            obs[11] = 0.65  # opponent facing away (exposed flank!)
+            obs[15], obs[16] = 0.15, 0.18
+            obs[31], obs[32] = 1.0, 1.0
+            return "FLANK SHOT", "Foe flank exposed at 35 deg (full energy, dash ready)", obs
+        else:
+            # BUMPER HAZARD: high-restitution pinball bumper directly ahead
+            obs[0], obs[1] = 0.20, 0.15
+            obs[2], obs[3] = 0.50, 0.05
+            obs[7], obs[8] = 0.35, -0.25
+            obs[14], obs[15], obs[29] = 0.10, 0.12, 0.12
+            obs[30], obs[31], obs[45] = 0.5, 0.5, 0.5  # obstacle/bumper surface type (+0.5)
+            return "BUMPER WALL", "Pinball bumper obstacle 2.0m ahead on Lidar", obs
+
+    def _draw_evo_brain_probe_view(self) -> None:
+        """Render Interactive 46->32->32->3 Neural Brain Topology, 4 Scenario Probes, and Causal Attribution."""
+        probe_names = ["FOE CHARGE", "NEAR VOID", "FLANK SHOT", "BUMPER WALL"]
+        probe_rects = [
+            pygame.Rect(405, 196, 103, 25),
+            pygame.Rect(513, 196, 103, 25),
+            pygame.Rect(621, 196, 103, 25),
+            pygame.Rect(729, 196, 106, 25),
+        ]
+        for p_i, p_rect in enumerate(probe_rects):
+            is_sel = p_i == self.evo_probe_idx
+            btn_p = UIButton(
+                p_rect,
+                probe_names[p_i],
+                self.font_tiny,
+                GOLD_ACCENT if is_sel else CYAN_ACCENT,
+                bg=(38, 46, 68) if is_sel else (18, 22, 32),
+            )
+            btn_p.draw(self.screen)
+
+        _, scenario_desc, probe_obs = self._build_evo_probe_obs(self.evo_probe_idx)
+        snap = self.evo_best_agent.get_brain_snapshot(probe_obs)
+
+        # Neural Topology Canvas (y=228..532)
+        net_rect = pygame.Rect(405, 228, 430, 304)
+        pygame.draw.rect(self.screen, (14, 18, 26), net_rect, border_radius=6)
+        pygame.draw.rect(self.screen, PANEL_BORDER, net_rect, 1, border_radius=6)
+
+        hdr = self.font_tiny.render(
+            f"CHAMPION MLP TOPOLOGY [{snap['arch']}] — BLUE: EXCITATORY | ORANGE: INHIBITORY",
+            True,
+            GOLD_ACCENT,
+        )
+        self.screen.blit(hdr, (net_rect.x + 10, net_rect.y + 6))
+
+        clusters = snap["clusters"]
+        h1_full = snap["h1"]
+        h2_full = snap["h2"]
+        out_vec = snap["out"]
+        cw1 = snap["cluster_w1"]
+        w2 = snap["w2"]
+        w3 = snap["w3"]
+
+        # Display 14 hidden nodes per layer in the large Evo Lab canvas
+        n_h = 14
+        h1_idx = np.linspace(0, len(h1_full) - 1, n_h, dtype=int)
+        h2_idx = np.linspace(0, len(h2_full) - 1, n_h, dtype=int)
+        h1_nodes = h1_full[h1_idx]
+        h2_nodes = h2_full[h2_idx]
+
+        col_x = [net_rect.x + 98, net_rect.x + 195, net_rect.x + 288, net_rect.x + 375]
+        g_top = net_rect.y + 28
+        g_bot = net_rect.bottom - 14
+
+        in_pos = [
+            (col_x[0], int(g_top + i * (g_bot - g_top) / max(1, len(clusters) - 1)))
+            for i in range(len(clusters))
+        ]
+        h1_pos = [
+            (col_x[1], int(g_top + i * (g_bot - g_top) / max(1, n_h - 1)))
+            for i in range(n_h)
+        ]
+        h2_pos = [
+            (col_x[2], int(g_top + i * (g_bot - g_top) / max(1, n_h - 1)))
+            for i in range(n_h)
+        ]
+        out_pos = [
+            (col_x[3], int(g_top + 45 + i * 85))
+            for i in range(3)
+        ]
+
+        # Draw active synapses (Cluster->H1, H1->H2, H2->Out)
+        for i, (_, c_val) in enumerate(clusters):
+            for j_pos, j_raw in enumerate(h1_idx):
+                flow = float(c_val * cw1[i, j_raw])
+                if abs(flow) > 0.06:
+                    col = (0, 210, 255) if flow > 0 else (255, 100, 45)
+                    pygame.draw.line(self.screen, col, in_pos[i], h1_pos[j_pos], 2 if abs(flow) > 0.22 else 1)
+
+        for j_pos, j_raw in enumerate(h1_idx):
+            h1_v = float(h1_nodes[j_pos])
+            for k_pos, k_raw in enumerate(h2_idx):
+                flow = float(h1_v * w2[j_raw, k_raw])
+                if abs(flow) > 0.10:
+                    col = (0, 195, 240) if flow > 0 else (240, 95, 45)
+                    pygame.draw.line(self.screen, col, h1_pos[j_pos], h2_pos[k_pos], 1)
+
+        for k_pos, k_raw in enumerate(h2_idx):
+            h2_v = float(h2_nodes[k_pos])
+            for m in range(3):
+                flow = float(h2_v * w3[k_raw, m])
+                if abs(flow) > 0.07:
+                    col = (50, 240, 150) if flow > 0 else (255, 105, 55)
+                    pygame.draw.line(self.screen, col, h2_pos[k_pos], out_pos[m], 2 if abs(flow) > 0.22 else 1)
+
+        # Draw Input Cluster Nodes + Labels
+        for i, (c_name, c_val) in enumerate(clusters):
+            px, py = in_pos[i]
+            v = float(np.clip(c_val, -1.0, 1.0))
+            n_col = (0, int(115 + 140 * abs(v)), 255) if v >= 0 else (255, int(85 + 115 * abs(v)), 50)
+            pygame.draw.circle(self.screen, n_col, (px, py), 5)
+            pygame.draw.circle(self.screen, TEXT_WHITE, (px, py), 5, 1)
+            lbl = self.font_tiny.render(f"{c_name}", True, TEXT_WHITE)
+            self.screen.blit(lbl, (net_rect.x + 8, py - 6))
+
+        # Draw H1 & H2 Nodes
+        for (px, py), val in zip(h1_pos, h1_nodes):
+            v = float(np.clip(val, -1.0, 1.0))
+            n_col = (0, int(95 + 160 * abs(v)), 240) if v >= 0 else (240, int(75 + 115 * abs(v)), 55)
+            pygame.draw.circle(self.screen, n_col, (px, py), 4)
+
+        for (px, py), val in zip(h2_pos, h2_nodes):
+            v = float(np.clip(val, -1.0, 1.0))
+            n_col = (40, int(100 + 155 * abs(v)), 225) if v >= 0 else (245, int(80 + 110 * abs(v)), 60)
+            pygame.draw.circle(self.screen, n_col, (px, py), 4)
+
+        # Draw Output Actuator Nodes & Gauges
+        out_names = ["THR", "STR", "ABL"]
+        for m in range(3):
+            px, py = out_pos[m]
+            v = float(np.clip(out_vec[m], -1.0, 1.0))
+            n_col = GREEN_ACCENT if v >= 0.1 else (ORANGE_ACCENT if v <= -0.1 else TEXT_MUTED)
+            pygame.draw.circle(self.screen, n_col, (px, py), 7)
+            pygame.draw.circle(self.screen, TEXT_WHITE, (px, py), 7, 1)
+            o_lbl = self.font_tiny.render(f"{out_names[m]} {v:+.2f}", True, n_col)
+            self.screen.blit(o_lbl, (px - 22, py + 10))
+
+        # Causal Attribution & Probe Telemetry Card (y=538..740)
+        why_rect = pygame.Rect(405, 538, 430, 202)
+        pygame.draw.rect(self.screen, (22, 27, 40), why_rect, border_radius=6)
+        pygame.draw.rect(self.screen, CYAN_ACCENT, why_rect, 1, border_radius=6)
+
+        self.screen.blit(
+            self.font_small.render(f"CAUSAL ATTRIBUTION — {snap['intent']}", True, GOLD_ACCENT),
+            (why_rect.x + 12, why_rect.y + 8),
+        )
+        self.screen.blit(
+            self.font_tiny.render(f"Probe: {scenario_desc}", True, CYAN_ACCENT),
+            (why_rect.x + 12, why_rect.y + 28),
+        )
+        act_str = f"Output Action: Thrust={out_vec[0]:+.2f} | Steer={out_vec[1]:+.2f} | Ability={out_vec[2]:+.2f}"
+        self.screen.blit(
+            self.font_tiny.render(act_str, True, TEXT_WHITE),
+            (why_rect.x + 12, why_rect.y + 46),
+        )
+
+        self.screen.blit(
+            self.font_tiny.render("TOP 3 SENSORY DRIVERS (WHICH INPUTS DROVE THIS DECISION):", True, GREEN_ACCENT),
+            (why_rect.x + 12, why_rect.y + 68),
+        )
+        drivers = snap.get("top_drivers", [])
+        for d_idx, (d_name, d_share, d_act) in enumerate(drivers[:3]):
+            ry = why_rect.y + 90 + d_idx * 26
+            lbl_d = self.font_tiny.render(f"#{d_idx + 1} {d_name}", True, TEXT_WHITE)
+            self.screen.blit(lbl_d, (why_rect.x + 12, ry))
+
+            bar_track = pygame.Rect(why_rect.x + 130, ry + 2, 175, 10)
+            pygame.draw.rect(self.screen, (14, 18, 26), bar_track, border_radius=3)
+            fill_w = int(bar_track.width * np.clip(d_share * 2.2, 0.06, 1.0))
+            b_col = GOLD_ACCENT if d_idx == 0 else (CYAN_ACCENT if d_idx == 1 else GREEN_ACCENT)
+            pygame.draw.rect(self.screen, b_col, pygame.Rect(bar_track.x, bar_track.y, fill_w, bar_track.height), border_radius=3)
+
+            drv_txt = self.font_tiny.render(f"{d_share * 100:4.1f}% -> {d_act}", True, b_col)
+            self.screen.blit(drv_txt, (why_rect.x + 315, ry))
+
+        footer_tip = self.font_tiny.render(
+            "Click any Scenario Probe button above or press [B] in any match for Live Brain View!",
+            True,
+            TEXT_MUTED,
+        )
+        self.screen.blit(footer_tip, (why_rect.x + 12, why_rect.bottom - 20))
 
     def _draw_evo_parameter_helper_card(self, rect: pygame.Rect) -> None:
         """Render the live Under-the-Hood parameter explanation & visual preview bar in Evo Lab."""
@@ -1528,14 +1791,53 @@ class ArcadeHub:
             (rect.x + 15, rect.y + 268),
         )
         self.screen.blit(
-            self.font_tiny.render("Tip: Hover any slider on the left to inspect its live math & effect.", True, GREEN_ACCENT),
+            self.font_tiny.render("Tip: Switch to 'BRAIN TOPOLOGY & PROBE' above to inspect synapses!", True, GREEN_ACCENT),
             (rect.x + 15, rect.y + 288),
         )
 
-    def _evo_step_generation(self, turbo_count: int = 1) -> None:
-        """Run neuroevolution generation(s) headless with active sparring partner and reward shaping."""
-        sparring_name = self.evo_sparring_choices[self.evo_sparring_idx]
+    def _evaluate_evo_individual(self, ind: GAMLP, eval_env: KineticSumoEnv, sparring_name: str) -> float:
+        """Evaluate a single genome against the chosen Sparring Partner or Gauntlet Curriculum."""
+        if "gauntlet" in sparring_name.lower():
+            curriculum = [HeuristicAgent(), BulldozerAgent(), ShinobiAgent()]
+            stage_scores = []
+            for partner in curriculum:
+                obs, _ = eval_env.reset()
+                partner.reset()
+                s_val = 0.0
+                for _ in range(60):
+                    a0 = ind.act(obs["agent_0"])
+                    a1 = partner.act(obs["agent_1"])
+                    obs, rews, terms, truncs, infos = eval_env.step({"agent_0": a0, "agent_1": a1})
+                    s_val += float(rews["agent_0"])
+                    if terms["agent_0"] or truncs["agent_0"]:
+                        if infos["agent_0"].get("winner") == "agent_0":
+                            s_val += 15.0 * float(self.evo_win_coeff)
+                        elif infos["agent_0"].get("winner") == "agent_1":
+                            s_val -= 10.0 * float(self.evo_win_coeff)
+                        break
+                stage_scores.append(s_val)
+            return float(np.mean(stage_scores))
+
         sparring_partner = self._instantiate_agent(sparring_name) or HeuristicAgent()
+        obs, _ = eval_env.reset()
+        sparring_partner.reset()
+        score = 0.0
+        for _ in range(120):
+            a0 = ind.act(obs["agent_0"])
+            a1 = sparring_partner.act(obs["agent_1"])
+            obs, rews, terms, truncs, infos = eval_env.step({"agent_0": a0, "agent_1": a1})
+            score += float(rews["agent_0"])
+            if terms["agent_0"] or truncs["agent_0"]:
+                if infos["agent_0"].get("winner") == "agent_0":
+                    score += 15.0 * float(self.evo_win_coeff)
+                elif infos["agent_0"].get("winner") == "agent_1":
+                    score -= 10.0 * float(self.evo_win_coeff)
+                break
+        return score
+
+    def _evo_step_generation(self, turbo_count: int = 1) -> None:
+        """Run neuroevolution generation(s) headless with 2-parent synaptic crossover & reward shaping."""
+        sparring_name = self.evo_sparring_choices[self.evo_sparring_idx]
         eval_env = KineticSumoEnv(map_name="Open", max_duration=12.0)
 
         # Apply pre-training reward shaping coefficients from Evo Lab sliders
@@ -1546,23 +1848,10 @@ class ArcadeHub:
 
         try:
             for _ in range(turbo_count):
-                scores = []
-                for ind in self.evo_population:
-                    obs, _ = eval_env.reset()
-                    sparring_partner.reset()
-                    score = 0.0
-                    for _ in range(120):
-                        a0 = ind.act(obs["agent_0"])
-                        a1 = sparring_partner.act(obs["agent_1"])
-                        obs, rews, terms, truncs, infos = eval_env.step({"agent_0": a0, "agent_1": a1})
-                        score += float(rews["agent_0"])
-                        if terms["agent_0"] or truncs["agent_0"]:
-                            if infos["agent_0"].get("winner") == "agent_0":
-                                score += 15.0 * float(self.evo_win_coeff)
-                            elif infos["agent_0"].get("winner") == "agent_1":
-                                score -= 10.0 * float(self.evo_win_coeff)
-                            break
-                    scores.append(score)
+                scores = [
+                    self._evaluate_evo_individual(ind, eval_env, sparring_name)
+                    for ind in self.evo_population
+                ]
 
                 sorted_indices = np.argsort(scores)[::-1]
                 best_fit = float(scores[sorted_indices[0]])
@@ -1576,11 +1865,15 @@ class ArcadeHub:
                 num_elites = max(2, int(len(self.evo_population) * self.evo_elite_ratio))
                 elites = [self.evo_population[i].clone() for i in sorted_indices[:num_elites]]
 
-                # Mutated offspring
+                # Two-parent synaptic crossover + Gaussian mutation offspring
                 next_pop = [e.clone() for e in elites]
                 while len(next_pop) < self.evo_pop_size:
-                    parent = elites[np.random.randint(0, len(elites))]
-                    child = parent.mutate(mutation_rate=self.evo_mutation_rate, sigma=self.evo_mutation_sigma)
+                    idx_a = int(np.random.randint(0, len(elites)))
+                    idx_b = int(np.random.randint(0, len(elites)))
+                    if len(elites) > 1 and idx_b == idx_a:
+                        idx_b = (idx_a + 1) % len(elites)
+                    crossed = elites[idx_a].crossover(elites[idx_b], crossover_rate=0.5)
+                    child = crossed.mutate(mutation_rate=self.evo_mutation_rate, sigma=self.evo_mutation_sigma)
                     next_pop.append(child)
 
                 self.evo_population = next_pop
@@ -1588,35 +1881,25 @@ class ArcadeHub:
         finally:
             eval_env.close()
 
+        # Refresh active probe snapshot on the new champion
+        _, _, p_obs = self._build_evo_probe_obs(self.evo_probe_idx)
+        self.evo_best_agent.act(p_obs, temperature=0.0)
+
         best_str = f"{self.evo_history_best[-1]:+.2f}" if self.evo_history_best else "N/A"
-        self.evo_status_text = f"Evolved to Gen {self.evo_generation} vs {sparring_name}! Best fitness: {best_str}"
+        self.evo_status_text = f"Evolved Gen {self.evo_generation} (Crossover+Mut) vs {sparring_name}! Fit: {best_str}"
 
     def _mutate_champion(self) -> None:
         """Mutate current champion directly, evaluate fitness and append consistently to history."""
         mutated = self.evo_best_agent.mutate(mutation_rate=self.evo_mutation_rate, sigma=self.evo_mutation_sigma)
         sparring_name = self.evo_sparring_choices[self.evo_sparring_idx]
-        sparring_partner = self._instantiate_agent(sparring_name) or HeuristicAgent()
         eval_env = KineticSumoEnv(map_name="Open", max_duration=12.0)
         eval_env.reward_calc.center_weight = float(self.evo_center_coeff)
         eval_env.reward_calc.closing_weight = float(0.6 * self.evo_aggression_coeff)
         eval_env.reward_calc.contact_weight = float(self.evo_aggression_coeff)
         eval_env.reward_calc.win_bonus = float(self.evo_win_coeff)
 
-        score = 0.0
         try:
-            obs, _ = eval_env.reset()
-            sparring_partner.reset()
-            for _ in range(120):
-                a0 = mutated.act(obs["agent_0"])
-                a1 = sparring_partner.act(obs["agent_1"])
-                obs, rews, terms, truncs, infos = eval_env.step({"agent_0": a0, "agent_1": a1})
-                score += float(rews["agent_0"])
-                if terms["agent_0"] or truncs["agent_0"]:
-                    if infos["agent_0"].get("winner") == "agent_0":
-                        score += 15.0 * float(self.evo_win_coeff)
-                    elif infos["agent_0"].get("winner") == "agent_1":
-                        score -= 10.0 * float(self.evo_win_coeff)
-                    break
+            score = self._evaluate_evo_individual(mutated, eval_env, sparring_name)
         finally:
             eval_env.close()
 
@@ -1634,6 +1917,8 @@ class ArcadeHub:
             best_to_record = best_prev
             self.evo_status_text = f"Mutated Champion (Gen {self.evo_generation}): {score:+.2f} (retained best: {best_prev:+.2f})"
 
+        _, _, p_obs = self._build_evo_probe_obs(self.evo_probe_idx)
+        self.evo_best_agent.act(p_obs, temperature=0.0)
         self.evo_history_best.append(best_to_record)
         self.evo_history_mean.append(score)
 

@@ -414,15 +414,18 @@ def test_no_text_overlaps_across_all_tabs():
         (2, None),  # TOURNAMENT
         (3, 0),     # ANALYTICS H2H
         (3, 1),     # ANALYTICS ELO
-        (4, None),  # EVO LAB
+        (4, 0),     # EVO LAB FITNESS & GENOME
+        (4, 1),     # EVO LAB BRAIN TOPOLOGY & PROBE
         (5, None),  # BOT LOCKER
         (6, None),  # MAP SHOWCASE
     ]
 
     for tab_idx, subview in tabs_to_check:
         hub.current_tab = tab_idx
-        if subview is not None:
+        if tab_idx == 3 and subview is not None:
             hub.analytics_subview = subview
+        elif tab_idx == 4 and subview is not None:
+            hub.evo_subview = subview
 
         text_blits.clear()
         ts = TrackedSurface((hub.screen_size, hub.screen_size))

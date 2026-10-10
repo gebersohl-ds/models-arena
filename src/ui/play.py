@@ -25,7 +25,7 @@ from src.agents.tactical import (
     TunableAgent,
     BotConfig,
 )
-from src.agents.ga_mlp import GAMLP
+from src.agents.ga_mlp import GAMLP, synthesize_tactical_brain_snapshot
 from src.agents.ppo_policy import PPOPolicy
 from src.maps import get_map, MAP_REGISTRY
 from src.ui.renderer import SumoRenderer
@@ -36,16 +36,32 @@ from src.env.arena_4way_env import KineticSumo4WayEnv
 SPEED_LEVELS = [0.25, 0.5, 1.0, 2.0, 4.0]
 
 
-def extract_xray_info(agents_map: dict[str, BaseAgent | None]) -> dict[str, dict]:
-    """Extract live behind-the-scenes intent and target vector telemetry from agent instances."""
+def extract_xray_info(
+    agents_map: dict[str, BaseAgent | None],
+    last_obs: dict[str, np.ndarray] | None = None,
+    last_actions: dict[str, np.ndarray] | None = None,
+) -> dict[str, dict]:
+    """Extract live behind-the-scenes intent, target vector, and neural brain snapshot from agent instances."""
     info: dict[str, dict] = {}
     for a_id, bot in agents_map.items():
+        obs_i = (last_obs or {}).get(a_id)
+        act_i = (last_actions or {}).get(a_id)
         if bot is None:
-            info[a_id] = {"intent": "HUMAN PILOT", "target_vec": None}
-        else:
             info[a_id] = {
-                "intent": getattr(bot, "last_intent", bot.__class__.__name__.replace("Agent", "").upper()),
+                "intent": "HUMAN PILOT",
+                "target_vec": None,
+                "brain": synthesize_tactical_brain_snapshot(obs_i, act_i, intent="HUMAN PILOT"),
+            }
+        else:
+            intent = getattr(bot, "last_intent", bot.__class__.__name__.replace("Agent", "").upper())
+            if hasattr(bot, "get_brain_snapshot"):
+                brain_snap = bot.get_brain_snapshot()
+            else:
+                brain_snap = synthesize_tactical_brain_snapshot(obs_i, act_i, intent=intent)
+            info[a_id] = {
+                "intent": intent,
                 "target_vec": getattr(bot, "target_vec", None),
+                "brain": brain_snap,
             }
     return info
 
@@ -243,14 +259,14 @@ def run_interactive_match(
     print("Controls:")
     print("  P1: W/S (drive/brake), A/D (steer), Space (dash), LShift (anchor)")
     print("  P2: Up/Down (drive/brake), Left/Right (steer), Enter (dash), RShift (anchor)")
-    print("  I: Toggle AI X-Ray  |  L: Toggle Lidar  |  P: Pause  |  .: Step  |  -/+: Speed  |  ESC: Menu\n")
+    print("  I: Toggle AI X-Ray  |  B: Toggle Brain View  |  L: Toggle Lidar  |  P: Pause  |  .: Step  |  -/+: Speed\n")
 
     agents_map = {"agent_0": agent0, "agent_1": agent1}
     env.render(
         round_scores=(wins_0, wins_1),
         rounds_to_win=rounds_to_win,
         agent_names=agent_names,
-        xray_info=extract_xray_info(agents_map),
+        xray_info=extract_xray_info(agents_map, obs, getattr(env, "_last_actions", None)),
         sim_status=f"SPEED:{SPEED_LEVELS[speed_idx]}x",
     )
 
@@ -278,6 +294,9 @@ def run_interactive_match(
                 elif event.key == pygame.K_i:
                     if env._renderer is not None:
                         env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                elif event.key == pygame.K_b:
+                    if env._renderer is not None:
+                        env._renderer.show_brain_overlay = not env._renderer.show_brain_overlay
                 elif event.key == pygame.K_p:
                     paused = not paused
                 elif event.key in (pygame.K_PERIOD, pygame.K_n):
@@ -309,7 +328,7 @@ def run_interactive_match(
                 agent_names=agent_names,
                 subtitle="[PAUSED — Press P to Resume or . to Step 1 Frame]",
                 fps=30,
-                xray_info=extract_xray_info(agents_map),
+                xray_info=extract_xray_info(agents_map, obs, getattr(env, "_last_actions", None)),
                 sim_status=sim_status,
             )
             continue
@@ -330,7 +349,7 @@ def run_interactive_match(
                 agent_names=agent_names,
                 subtitle=subtitle,
                 fps=target_fps,
-                xray_info=extract_xray_info(agents_map),
+                xray_info=extract_xray_info(agents_map, obs, getattr(env, "_last_actions", None)),
                 sim_status=sim_status,
             )
             round_over_timer += dt
@@ -369,7 +388,7 @@ def run_interactive_match(
             agent_names=agent_names,
             subtitle=subtitle,
             fps=target_fps,
-            xray_info=extract_xray_info(agents_map),
+            xray_info=extract_xray_info(agents_map, obs, getattr(env, "_last_actions", None)),
             sim_status=sim_status,
         )
 
@@ -424,11 +443,11 @@ def run_interactive_4way_match(
 
     print("\n--- Kinetic Sumo 4-Way Battle Royale ---")
     print(f"Arena Map: {map_name} | Elimination: Last Disc Standing")
-    print("Controls: P1 (WASD/Space/Shift), P2 (Arrows/Enter/RShift), I (X-Ray), P (Pause), . (Step), -/+ (Speed), M (Mute), ESC (Menu)\n")
+    print("Controls: P1 (WASD/Space/Shift), P2 (Arrows/Enter/RShift), I (X-Ray), B (Brain View), P (Pause), . (Step), -/+ (Speed), M (Mute), ESC (Menu)\n")
 
     env.render(
         agent_names=tuple(agent_labels),
-        xray_info=extract_xray_info(agent_instances),
+        xray_info=extract_xray_info(agent_instances, obs, getattr(env, "_last_actions", None)),
         sim_status=f"SPEED:{SPEED_LEVELS[speed_idx]}x",
     )
 
@@ -451,6 +470,9 @@ def run_interactive_4way_match(
                 elif event.key == pygame.K_i:
                     if env._renderer is not None:
                         env._renderer.show_xray_overlay = not env._renderer.show_xray_overlay
+                elif event.key == pygame.K_b:
+                    if env._renderer is not None:
+                        env._renderer.show_brain_overlay = not env._renderer.show_brain_overlay
                 elif event.key == pygame.K_p:
                     paused = not paused
                 elif event.key in (pygame.K_PERIOD, pygame.K_n):
@@ -475,7 +497,7 @@ def run_interactive_4way_match(
                 agent_names=tuple(agent_labels),
                 subtitle="[PAUSED — Press P to Resume or . to Step 1 Frame]",
                 fps=30,
-                xray_info=extract_xray_info(agent_instances),
+                xray_info=extract_xray_info(agent_instances, obs, getattr(env, "_last_actions", None)),
                 sim_status=sim_status,
             )
             continue
@@ -498,7 +520,7 @@ def run_interactive_4way_match(
         env.render(
             agent_names=tuple(agent_labels),
             fps=target_fps,
-            xray_info=extract_xray_info(agent_instances),
+            xray_info=extract_xray_info(agent_instances, obs, getattr(env, "_last_actions", None)),
             sim_status=sim_status,
         )
 
